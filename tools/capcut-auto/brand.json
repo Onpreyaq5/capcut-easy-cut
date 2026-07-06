@@ -1,0 +1,20 @@
+{
+  "_comment": "ตั้งค่าแบรนด์ CAPCUT Easy CUT — green_kw=คำที่ให้เป็นสีเขียว, yellow_kw=คำที่ให้เป็นสีเหลือง, corrections=แทนคำที่ whisper ถอดเพี้ยน",
+  "font_size": 12.0,
+  "line_chars": 15,
+  "max_chars": 20,
+  "min_silence": 0.40,
+  "y_pos": -0.42,
+  "keyword_y_pos": -0.42,
+  "soft_y_pos": -0.26,
+  "soft_left_x": -0.34,
+  "soft_right_x": 0.34,
+  "soft_white": [0.86, 0.9, 0.96],
+  "green_kw": ["CAPCUT", "Easy CUT", "CapCut", "แคปคัท", "ซับ", "ซับไตเติ้ล"],
+  "yellow_kw": ["Dead air", "dead air", "วินาที", "นาที", "ชั่วโมง", "เปอร์เซ็นต์", "คลิป", "ไฟล์"],
+  "corrections": {
+    "แคปคัด": "แคปคัท",
+    "แคปคัต": "แคปคัท",
+    "เดดแอร์": "Dead air"
+  }
+}

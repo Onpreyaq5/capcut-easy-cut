@@ -1,0 +1,43 @@
+{
+  "name": "capcut-easy-cut",
+  "version": "0.2.0",
+  "private": true,
+  "description": "CAPCUT Easy CUT — ลากคลิปใส่เว็บ ตัด Dead air ทำซับไตเติ้ลอัตโนมัติ แล้วดาวน์โหลดไปใช้ต่อใน CapCut",
+  "scripts": {
+    "predev": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\"",
+    "dev": "next dev",
+    "prebuild": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\"",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1",
+    "clsx": "2.1.1",
+    "file-saver": "2.0.5",
+    "framer-motion": "11.5.6",
+    "jszip": "3.10.1",
+    "lucide-react": "0.451.0",
+    "next": "^14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-markdown": "9.0.1",
+    "remark-gfm": "4.0.0",
+    "tailwind-merge": "2.5.2",
+    "zustand": "4.5.5"
+  },
+  "devDependencies": {
+    "@types/file-saver": "2.0.7",
+    "@types/node": "20.16.10",
+    "@types/react": "18.3.11",
+    "@types/react-dom": "18.3.0",
+    "autoprefixer": "10.4.20",
+    "eslint": "8.57.1",
+    "eslint-config-next": "^14.2.35",
+    "postcss": "8.4.47",
+    "tailwindcss": "3.4.13",
+    "typescript": "5.6.2"
+  }
+}

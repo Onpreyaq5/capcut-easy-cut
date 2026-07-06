@@ -1,0 +1,5 @@
+_web_jobs/
+_capcut_work/
+__pycache__/
+*.pyc
+words_*.json

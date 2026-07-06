@@ -27,3 +27,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python cache (เอนจิน capcut-auto)
+__pycache__/
+*.pyc
+
+# local dev tooling
+/.claude/

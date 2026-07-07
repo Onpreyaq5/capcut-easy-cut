@@ -31,7 +31,7 @@ export interface Job {
   curClip: number;
 }
 
-const TOOL_DIR = path.join(process.cwd(), 'tools', 'capcut-auto');
+const TOOL_DIR = path.join('tools', 'capcut-auto');
 // เก็บไฟล์งานนอกโฟลเดอร์โปรเจกต์ที่ซิงก์ OneDrive (กัน ffmpeg/whisper ชนการซิงก์)
 const JOBS_ROOT = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'CAPCUT_Easy_CUT', 'jobs');
 const MAX_LOG = 400;
@@ -144,10 +144,10 @@ function setClipProgress(j: Job, fracWithinClip: number) {
 }
 
 async function addFolderToZip(zip: JSZip, folder: string, base = ''): Promise<void> {
-  const entries = await fs.readdir(folder, { withFileTypes: true });
+  const entries = await fs.readdir(/*turbopackIgnore: true*/ folder, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === '_work') continue;
-    const abs = path.join(folder, entry.name);
+    const abs = path.join(/*turbopackIgnore: true*/ folder, entry.name);
     const rel = base ? `${base}/${entry.name}` : entry.name;
     if (entry.isDirectory()) await addFolderToZip(zip, abs, rel);
     // ป้อนไฟล์เข้า zip เป็น stream (ไม่อ่านทั้งไฟล์เข้า RAM) — ตัวใหญ่คือวิดีโอ combined

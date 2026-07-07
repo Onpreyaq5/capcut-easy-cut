@@ -8,7 +8,7 @@ import JSZip from 'jszip';
 export const runtime = 'nodejs';
 export const maxDuration = 900;
 
-const TOOL_DIR = path.join(process.cwd(), 'tools', 'capcut-auto');
+const TOOL_DIR = path.join('tools', 'capcut-auto');
 // เก็บไฟล์งานนอกโฟลเดอร์โปรเจกต์ที่ซิงก์ OneDrive กัน ffmpeg/whisper ชนกับการซิงก์ระหว่างประมวลผล
 const JOBS_ROOT = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'CAPCUT_Easy_CUT', 'jobs');
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.m4v']);

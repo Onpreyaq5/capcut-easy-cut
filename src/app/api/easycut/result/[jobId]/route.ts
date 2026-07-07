@@ -6,12 +6,13 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-export async function GET(_req: NextRequest, { params }: { params: { jobId: string } }) {
-  const job = getJob(params.jobId);
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
+  const { jobId } = await params;
+  const job = getJob(jobId);
   if (!job) return new Response('ไม่พบงานนี้', { status: 404 });
   if (job.status !== 'done' || !job.zipPath) return new Response('งานยังไม่เสร็จ', { status: 409 });
 
-  const opened = openResultStream(params.jobId);
+  const opened = openResultStream(jobId);
   if (!opened) return new Response('ไม่พบไฟล์ผลลัพธ์', { status: 404 });
 
   // สตรีมจากดิสก์ตรง ๆ (ไม่โหลด ZIP ทั้งก้อนเข้า RAM)

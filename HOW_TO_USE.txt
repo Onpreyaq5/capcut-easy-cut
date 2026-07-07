@@ -15,6 +15,7 @@ CAPCUT Easy CUT v1.1.0 - วิธีใช้งานแบบสั้น
 
 โครงไฟล์ในชุดนี้
 - RUN_CAPCUT_Easy_CUT.bat  = ไฟล์รันหลัก
+- RUN_CAPCUT_Easy_CUT.ps1  = ตัวช่วยรันด้านใน ห้ามลบ
 - web                      = ไฟล์เว็บแอป CAPCUT Easy CUT
 - HOW_TO_USE.txt           = วิธีใช้งาน
 

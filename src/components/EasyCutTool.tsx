@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AudioLines,
+  Ban,
   CheckCircle2,
   Download,
   FileText,
@@ -22,6 +23,14 @@ import { useApp } from '@/lib/store';
 import type { ProviderId, Settings } from '@/lib/types';
 
 type BusyMode = '' | 'zip' | 'capcut';
+
+interface JobProgress {
+  status: 'running' | 'done' | 'error' | 'canceled';
+  progress: number;
+  phase: string;
+  log: string[];
+  error?: string;
+}
 
 /** AI เจ้าฟรีสำหรับงานตรวจแก้ภาษาไทยในซับ (API มาตรฐาน OpenAI) */
 const THAI_CHECK_PROVIDERS: Record<string, { label: string; model: string; keyUrl: string }> = {
@@ -95,7 +104,17 @@ export function EasyCutTool() {
   const [busy, setBusy] = useState<BusyMode>('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [job, setJob] = useState<JobProgress | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const jobIdRef = useRef<string>('');
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // เคลียร์ตัวจับเวลา poll เมื่อ component ถูกถอด
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, []);
 
   const totalSize = useMemo(() => files.reduce((sum, f) => sum + f.size, 0), [files]);
   const firstFile = files[0];
@@ -127,80 +146,123 @@ export function EasyCutTool() {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function downloadPackage() {
+  function buildFormData(mode: BusyMode): FormData {
+    const fd = new FormData();
+    fd.append('mode', mode);
+    fd.append('name', projectName || 'CAPCUT_Easy_CUT');
+    fd.append('deadAir', deadAir ? 'on' : 'off');
+    fd.append('hook', hookText.trim());
+    // AI (ถ้ามี) ใช้ตรวจแก้ภาษาไทยในซับให้แม่นขึ้น — ไม่บังคับ
+    if (thaiCheckLlm) {
+      fd.append('llmProvider', thaiCheckLlm.provider);
+      fd.append('llmKey', thaiCheckLlm.key);
+      fd.append('llmModel', thaiCheckLlm.model);
+      fd.append('llmBase', thaiCheckLlm.base);
+    }
+    files.forEach((file) => fd.append('clips', file));
+    return fd;
+  }
+
+  // จบงาน CapCut: ดึงสรุปผลตรวจภาษาไทยจาก log มาแสดง
+  function capcutSuccessMessage(log: string[]): string {
+    const infoLines = log
+      .filter((l) => l.includes('[THAI]'))
+      .map((l) => l.replace('[THAI]', 'ภาษาไทย:').trim())
+      .join('\n');
+    return (
+      `สร้างโปรเจกต์ "${projectName || 'CAPCUT_Easy_CUT'}" ใน CapCut แล้ว ปิด CapCut ให้สนิทแล้วเปิดใหม่` +
+      (infoLines ? `\n${infoLines}` : '')
+    );
+  }
+
+  // poll สถานะงานทุก 1 วิ จนกว่าจะเสร็จ/ล้ม/ยกเลิก
+  function pollStatus(jobId: string, mode: BusyMode) {
+    const tick = async () => {
+      if (jobIdRef.current !== jobId) return; // มีงานใหม่แทนที่แล้ว
+      try {
+        const res = await fetch(`/api/easycut/status/${jobId}`, { cache: 'no-store' });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error || 'ติดตามสถานะงานไม่สำเร็จ');
+        }
+        const s = (await res.json()) as JobProgress & { resultName?: string };
+        setJob({ status: s.status, progress: s.progress, phase: s.phase, log: s.log || [], error: s.error });
+
+        if (s.status === 'done') {
+          if (mode === 'zip') {
+            const r = await fetch(`/api/easycut/result/${jobId}`);
+            if (!r.ok) throw new Error('ดาวน์โหลดผลลัพธ์ไม่สำเร็จ');
+            const blob = await r.blob();
+            const name = filenameFromDisposition(r.headers.get('Content-Disposition'), `${projectName || 'CAPCUT_Easy_CUT'}_package.zip`);
+            downloadBlob(blob, name);
+            setSuccess('ดาวน์โหลดแพ็กเกจแล้ว: วิดีโอหลังตัด + smart subtitles + transcript พร้อมเข้า CapCut');
+          } else {
+            setSuccess(capcutSuccessMessage(s.log || []));
+          }
+          finishJob();
+          return;
+        }
+        if (s.status === 'error') {
+          const tail = (s.log || []).slice(-8).join('\n');
+          setError((s.error || 'ประมวลผลไม่สำเร็จ') + (tail ? `\n\n${tail}` : ''));
+          finishJob();
+          return;
+        }
+        if (s.status === 'canceled') {
+          setError('ยกเลิกงานแล้ว');
+          finishJob();
+          return;
+        }
+        pollRef.current = setTimeout(tick, 1000);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+        finishJob();
+      }
+    };
+    pollRef.current = setTimeout(tick, 600);
+  }
+
+  function finishJob() {
+    if (pollRef.current) clearTimeout(pollRef.current);
+    pollRef.current = null;
+    jobIdRef.current = '';
+    setBusy('');
+    setJob(null);
+  }
+
+  async function runJob(mode: BusyMode) {
     if (!files.length) {
       setError('ลากคลิปเข้ามาก่อน แล้วค่อยเริ่มประมวลผล');
       return;
     }
-    setBusy('zip');
+    setBusy(mode);
     setError('');
     setSuccess('');
+    setJob({ status: 'running', progress: 0, phase: 'กำลังอัปโหลดคลิป...', log: [] });
     try {
-      const fd = new FormData();
-      fd.append('name', projectName || 'CAPCUT_Easy_CUT');
-      fd.append('deadAir', deadAir ? 'on' : 'off');
-      files.forEach((file) => fd.append('clips', file));
-      const res = await fetch('/api/easycut/process', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        const log = body?.log ? `\n\n${body.log}` : '';
-        throw new Error((body?.error || 'ประมวลผลไม่สำเร็จ') + log);
+      const res = await fetch(`/api/easycut/start?mode=${mode}`, { method: 'POST', body: buildFormData(mode) });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok || !body.jobId) {
+        throw new Error(body?.error || 'เริ่มงานไม่สำเร็จ');
       }
-      const blob = await res.blob();
-      const name = filenameFromDisposition(res.headers.get('Content-Disposition'), `${projectName || 'CAPCUT_Easy_CUT'}_package.zip`);
-      downloadBlob(blob, name);
-      setSuccess('ดาวน์โหลดแพ็กเกจแล้ว: วิดีโอหลังตัด + smart subtitles + transcript พร้อมเข้า CapCut');
+      jobIdRef.current = body.jobId;
+      pollStatus(body.jobId, mode);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-    } finally {
-      setBusy('');
+      setError(e instanceof Error ? e.message : String(e));
+      finishJob();
     }
   }
 
-  async function createCapCutProject() {
-    if (!files.length) {
-      setError('ลากคลิปเข้ามาก่อน แล้วค่อยสร้างโปรเจกต์ CapCut');
-      return;
-    }
-    setBusy('capcut');
-    setError('');
-    setSuccess('');
-    try {
-      const fd = new FormData();
-      fd.append('name', projectName || 'CAPCUT_Easy_CUT');
-      fd.append('hook', hookText.trim());
-      // AI (ถ้ามี) ใช้ตรวจแก้ภาษาไทยในซับให้แม่นขึ้น — ไม่บังคับ
-      if (thaiCheckLlm) {
-        fd.append('llmProvider', thaiCheckLlm.provider);
-        fd.append('llmKey', thaiCheckLlm.key);
-        fd.append('llmModel', thaiCheckLlm.model);
-        fd.append('llmBase', thaiCheckLlm.base);
-      }
-      files.forEach((file) => fd.append('clips', file));
-      const res = await fetch('/api/capcut/build', { method: 'POST', body: fd });
-      const body = await res.json().catch(() => null);
-      if (!res.ok || !body?.ok) {
-        const log = body?.log ? `\n\n${body.log}` : '';
-        throw new Error((body?.error || 'สร้างโปรเจกต์ไม่สำเร็จ') + log);
-      }
-      // ดึงสรุปผลตรวจภาษาไทย จาก log มาแสดง
-      const infoLines = String(body.log || '')
-        .split('\n')
-        .filter((l: string) => l.includes('[THAI]'))
-        .map((l: string) => l.replace('[THAI]', 'ภาษาไทย:').trim())
-        .join('\n');
-      setSuccess(
-        `สร้างโปรเจกต์ "${body.name}" ใน CapCut แล้ว ปิด CapCut ให้สนิทแล้วเปิดใหม่` +
-          (infoLines ? `\n${infoLines}` : ''),
-      );
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-    } finally {
-      setBusy('');
-    }
+  async function cancelCurrentJob() {
+    const id = jobIdRef.current;
+    if (!id) return;
+    setJob((j) => (j ? { ...j, phase: 'กำลังยกเลิก...' } : j));
+    await fetch(`/api/easycut/cancel/${id}`, { method: 'POST' }).catch(() => undefined);
+    // ปล่อยให้ poll ตัวถัดไปอ่านสถานะ canceled แล้ว finishJob เอง
   }
+
+  const downloadPackage = () => runJob('zip');
+  const createCapCutProject = () => runJob('capcut');
 
   return (
     <div className="container-page py-8 lg:py-12">
@@ -432,13 +494,28 @@ export function EasyCutTool() {
 
             {isBusy && (
               <div className="mt-4 rounded-lg border border-border bg-surface-muted p-3 text-sm text-text-secondary">
-                <div className="flex items-center gap-2 font-semibold">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  {busy === 'zip' ? 'กำลังวิเคราะห์เสียงและทำซับ' : 'กำลังสร้างโปรเจกต์ CapCut'}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2 font-semibold">
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                    <span className="truncate">{job?.phase || (busy === 'zip' ? 'กำลังวิเคราะห์เสียงและทำซับ' : 'กำลังสร้างโปรเจกต์ CapCut')}</span>
+                  </div>
+                  <span className="shrink-0 tabular-nums text-xs font-semibold text-text-muted">{Math.round(job?.progress ?? 0)}%</span>
                 </div>
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-bg-subtle">
-                  <div className="h-full w-2/3 animate-pulse rounded-full grad-hero" />
+                  <div
+                    className="h-full rounded-full grad-hero transition-[width] duration-500 ease-out"
+                    style={{ width: `${Math.max(3, Math.min(100, job?.progress ?? 3))}%` }}
+                  />
                 </div>
+                {job?.log && job.log.length > 0 && (
+                  <pre className="mt-3 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg-subtle p-2 text-[11px] leading-relaxed text-text-muted">
+                    {job.log.slice(-6).join('\n')}
+                  </pre>
+                )}
+                <Button variant="ghost" size="sm" className="mt-3 w-full" onClick={cancelCurrentJob}>
+                  <Ban className="h-4 w-4" />
+                  ยกเลิกงาน
+                </Button>
               </div>
             )}
 

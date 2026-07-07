@@ -91,21 +91,47 @@ def ass_escape(text):
     return (text or "").replace("{", "").replace("}", "").replace("\n", "\\N")
 
 
-def write_ass(captions, path):
-    header = """[Script Info]
+# สไตล์อ้างอิงที่จูนไว้บน canvas 1080x1920 — ค่าที่สเกลได้จะถูกคูณตามความละเอียดจริงของ output
+# (name, font, fontsize, primary, secondary, outline_col, back_col, bold, alignment, marginL, marginR, marginV, outline_w, shadow)
+_ASS_STYLE_DEFS = [
+    ("Keyword", "Leelawadee UI", 82, "&H0000E6FF", "&H000000FF", "&H00101624", "&H7A000000", -1, 2, 90, 90, 315, 5, 1),
+    ("SoftLeft", "Leelawadee UI", 42, "&H00FFFFFF", "&H000000FF", "&H66101624", "&H66000000", 0, 1, 88, 90, 420, 3, 0),
+    ("SoftRight", "Leelawadee UI", 42, "&H00FFFFFF", "&H000000FF", "&H66101624", "&H66000000", 0, 3, 90, 88, 420, 3, 0),
+    ("Normal", "Leelawadee UI", 54, "&H00FFFFFF", "&H000000FF", "&H66101624", "&H66000000", 0, 2, 90, 90, 330, 4, 0),
+]
+
+
+def _num(x):
+    """เลขจำนวนเต็มพิมพ์แบบไม่มี .0 (ให้เอาต์พุต portrait เท่าเดิมเป๊ะ) ไม่งั้นทศนิยม 1 ตำแหน่ง"""
+    x = round(float(x), 1)
+    return str(int(x)) if x == int(x) else str(x)
+
+
+def _ass_styles(sx, sy):
+    lines = []
+    for (nm, fn, sz, pri, sec, ol, bk, bold, al, mL, mR, mV, ow, sh) in _ASS_STYLE_DEFS:
+        # ฟอนต์/เส้นขอบ/ระยะขอบซ้ายขวา สเกลตามความกว้าง; ระยะขอบล่าง (MarginV) สเกลตามความสูง
+        lines.append(
+            f"Style: {nm},{fn},{max(1, round(sz * sx))},{pri},{sec},{ol},{bk},{bold},0,0,0,100,100,0,0,1,"
+            f"{_num(ow * sx)},{_num(sh * sx)},{al},{round(mL * sx)},{round(mR * sx)},{round(mV * sy)},1"
+        )
+    return "\n".join(lines)
+
+
+def write_ass(captions, path, out_w=1080, out_h=1920):
+    sx = out_w / 1080.0
+    sy = out_h / 1920.0
+    header = f"""[Script Info]
 Title: CAPCUT Easy CUT Smart Karaoke
 ScriptType: v4.00+
 WrapStyle: 2
 ScaledBorderAndShadow: yes
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {out_w}
+PlayResY: {out_h}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Keyword,Leelawadee UI,82,&H0000E6FF,&H000000FF,&H00101624,&H7A000000,-1,0,0,0,100,100,0,0,1,5,1,2,90,90,315,1
-Style: SoftLeft,Leelawadee UI,42,&H00FFFFFF,&H000000FF,&H66101624,&H66000000,0,0,0,0,100,100,0,0,1,3,0,1,88,90,420,1
-Style: SoftRight,Leelawadee UI,42,&H00FFFFFF,&H000000FF,&H66101624,&H66000000,0,0,0,0,100,100,0,0,1,3,0,3,90,88,420,1
-Style: Normal,Leelawadee UI,54,&H00FFFFFF,&H000000FF,&H66101624,&H66000000,0,0,0,0,100,100,0,0,1,4,0,2,90,90,330,1
+{_ass_styles(sx, sy)}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -268,6 +294,7 @@ def main():
         cc.concat_clips([p[0] for p in per_clip], combined)
 
     total_dur = cc.ffprobe_dur(combined) or processed_total
+    out_w, out_h = cc.ffprobe_wh(combined)  # ความละเอียดจริงของ output -> ทำให้ซับ .ass สเกลถูกทั้งแนวตั้ง/แนวนอน
     all_captions = []
     all_sentence_captions = []
     transcript_lines = []
@@ -289,7 +316,7 @@ def main():
 
     write_srt(all_captions, os.path.join(out_dir, "subtitles.srt"))
     write_vtt(all_captions, os.path.join(out_dir, "subtitles.vtt"))
-    write_ass(all_captions, os.path.join(out_dir, "subtitles_styled.ass"))
+    write_ass(all_captions, os.path.join(out_dir, "subtitles_styled.ass"), out_w, out_h)
     write_srt(all_sentence_captions, os.path.join(out_dir, "subtitles_sentence.srt"))
     write_vtt(all_sentence_captions, os.path.join(out_dir, "subtitles_sentence.vtt"))
     with open(os.path.join(out_dir, "transcript.txt"), "w", encoding="utf-8") as f:

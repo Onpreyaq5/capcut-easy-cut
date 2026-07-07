@@ -22,6 +22,16 @@ TEMPLATE_DIR = os.path.join(HERE, "template_draft")   # template สำเร็
 FFMPEG = os.environ.get("EASYCUT_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("EASYCUT_FFPROBE", "ffprobe")
 
+# ปรับความเร็ว/คุณภาพการ encode — default เร่งให้เร็วขึ้นโดยกระทบคุณภาพน้อย
+# (ไฟล์ที่ได้เป็นไฟล์ตั้งต้นเข้า CapCut ซึ่งจะ re-export ตัวจริงอีกที) ปรับผ่าน env ได้
+ENCODE_PRESET = (os.environ.get("EASYCUT_PRESET", "faster").strip() or "faster")
+ENCODE_CRF = (os.environ.get("EASYCUT_CRF", "20").strip() or "20")
+# beam_size ของ whisper: 1 = greedy เร็วสุด (ไทยต่างจาก beam 5 เพียงเล็กน้อย) เพิ่มเป็น 5 ได้ถ้าต้องการแม่นสุด
+try:
+    WHISPER_BEAM = max(1, int(os.environ.get("EASYCUT_WHISPER_BEAM", "1") or "1"))
+except ValueError:
+    WHISPER_BEAM = 1
+
 # ฟอนต์สำรอง (เรียงตามลำดับ) เผื่อเครื่อง user ไม่มีฟอนต์ที่ตั้งไว้
 _FONT_FALLBACKS = [
     "C:/Windows/Fonts/LeelaUIb.ttf",   # Leelawadee UI Bold (มากับ Windows)
@@ -45,18 +55,52 @@ def resolve_font(brand):
     return (want or _FONT_FALLBACKS[0]).replace("\\", "/")
 
 
+def _exe_ok(exe):
+    try:
+        r = subprocess.run([exe, "-version"], capture_output=True, text=True,
+                           encoding="utf-8", errors="ignore")
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _discover_ffmpeg():
+    """หา ffmpeg.exe ในตำแหน่งติดตั้งยอดนิยมบน Windows เผื่อไม่อยู่ใน PATH ของโปรเซสนี้
+    (เช่น winget เพิ่งติดตั้งแล้ว PATH ยังไม่รีเฟรช หรือเว็บถูกเปิดจาก shell ที่ PATH ไม่ครบ)
+    คืน (ffmpeg, ffprobe) หรือ (None, None)"""
+    cand = []
+    if LOCALAPPDATA:
+        # 1) ตัวลิงก์ของ winget
+        cand.append(os.path.join(LOCALAPPDATA, "Microsoft", "WinGet", "Links", "ffmpeg.exe"))
+        # 2) โฟลเดอร์แพ็กเกจ Gyan.FFmpeg ของ winget
+        cand += glob.glob(os.path.join(LOCALAPPDATA, "Microsoft", "WinGet", "Packages",
+                                       "Gyan.FFmpeg*", "**", "ffmpeg.exe"), recursive=True)
+        # 3) ตัวที่ตัวติดตั้งอัตโนมัติของแอป (ensure_deps.ps1) ดาวน์โหลดไว้
+        cand += glob.glob(os.path.join(LOCALAPPDATA, "CAPCUT_Easy_CUT", "ffmpeg",
+                                       "**", "ffmpeg.exe"), recursive=True)
+    # 4) ตำแหน่งติดตั้งเองยอดนิยม
+    cand += glob.glob(r"C:\ffmpeg\**\ffmpeg.exe", recursive=True)
+    for c in cand:
+        probe = os.path.join(os.path.dirname(c), "ffprobe.exe")
+        if os.path.exists(c) and os.path.exists(probe) and _exe_ok(c) and _exe_ok(probe):
+            return c, probe
+    return None, None
+
+
 def ensure_ffmpeg():
-    """ตรวจว่าเรียก ffmpeg/ffprobe ได้ — ไม่ได้ให้ error ชัดเจนแทนที่จะพังกลางทาง"""
-    for exe, name in ((FFMPEG, "ffmpeg"), (FFPROBE, "ffprobe")):
-        try:
-            r = subprocess.run([exe, "-version"], capture_output=True, text=True,
-                               encoding="utf-8", errors="ignore")
-            if r.returncode != 0:
-                raise RuntimeError
-        except Exception:
-            raise SystemExit(
-                f"เรียก {name} ไม่ได้ — ต้องติดตั้ง ffmpeg ก่อน (winget install Gyan.FFmpeg) "
-                f"หรือแอปต้อง bundle ffmpeg มาด้วย (ตั้ง env EASYCUT_FFMPEG/EASYCUT_FFPROBE)")
+    """ตรวจว่าเรียก ffmpeg/ffprobe ได้ — ถ้าไม่อยู่ใน PATH จะค้นหาในเครื่องให้เองก่อน
+    หาไม่เจอจริงๆ ค่อย error พร้อมวิธีแก้ที่ทำตามได้ทันที"""
+    global FFMPEG, FFPROBE
+    if _exe_ok(FFMPEG) and _exe_ok(FFPROBE):
+        return
+    f, p = _discover_ffmpeg()
+    if f:
+        FFMPEG, FFPROBE = f, p
+        print(f"   ใช้ ffmpeg ที่พบในเครื่อง: {f}", flush=True)
+        return
+    raise SystemExit(
+        "เรียก ffmpeg ไม่ได้ — วิธีแก้: ปิดหน้าต่างนี้ แล้วดับเบิลคลิกไฟล์ \"⚙️ ติดตั้งครั้งแรก.bat\" "
+        "(อยู่ในโฟลเดอร์ tools\\capcut-auto) ระบบจะติดตั้ง ffmpeg ให้อัตโนมัติ เสร็จแล้วเปิดเว็บใหม่อีกครั้ง")
 
 
 def ensure_capcut():
@@ -213,6 +257,21 @@ def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
 
 
+def run_filter(input_args, fc, output_args):
+    """รัน ffmpeg โดยส่ง filter graph ผ่านไฟล์ (-filter_complex_script) แทน inline
+    หลบลิมิตความยาว command line ของ Windows (WinError 206) เมื่อ keep/clip segment เยอะ"""
+    fd, fpath = tempfile.mkstemp(suffix=".ffscript.txt", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(fc)
+        return run([FFMPEG, "-y"] + input_args + ["-filter_complex_script", fpath] + output_args)
+    finally:
+        try:
+            os.remove(fpath)
+        except OSError:
+            pass
+
+
 # ---------- media probe ----------
 def ffprobe_dur(path):
     r = run([FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path])
@@ -268,9 +327,10 @@ def tighten_clip(src, keeps, out):
         parts.append(f"[0:a]atrim={ks:.3f}:{ke:.3f},asetpts=PTS-STARTPTS[a{i}];")
     concat_in = "".join(f"[v{i}][a{i}]" for i in range(len(keeps)))
     fc = "".join(parts) + f"{concat_in}concat=n={len(keeps)}:v=1:a=1[v][a]"
-    run([FFMPEG, "-y", "-i", src, "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", out])
+    run_filter(["-i", src], fc,
+               ["-map", "[v]", "-map", "[a]",
+                "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", ENCODE_CRF,
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", out])
     if not os.path.exists(out):
         raise SystemExit(f"ffmpeg tighten failed for {src}")
 
@@ -290,20 +350,27 @@ def make_timemap(keeps):
     return m
 
 
-def concat_clips(clips, out):
-    """ต่อคลิปที่ตัด dead air แล้วเข้าด้วยกันเป็นไฟล์เดียว (re-encode ให้สเปกตรงกัน)"""
+def concat_clips(clips, out, target_wh=None):
+    """ต่อคลิปที่ตัด dead air แล้วเข้าด้วยกันเป็นไฟล์เดียว (re-encode ให้สเปกตรงกัน)
+    canvas ยึดตามคลิปแรก (คงแนวนอน/แนวตั้งตามต้นฉบับ) ไม่บังคับเป็น 9:16 อีกต่อไป"""
     n = len(clips)
+    if target_wh is None:
+        target_wh = ffprobe_wh(clips[0])
+    tw, th = target_wh
+    tw -= tw % 2  # libx264 ต้องการขนาดเป็นเลขคู่
+    th -= th % 2
     inputs = []
     for c in clips:
         inputs += ["-i", c]
-    v = "".join(f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
-                f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];" for i in range(n))
+    v = "".join(f"[{i}:v]scale={tw}:{th}:force_original_aspect_ratio=decrease,"
+                f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];" for i in range(n))
     a = "".join(f"[{i}:a]aresample=48000[a{i}];" for i in range(n))
     cat = "".join(f"[v{i}][a{i}]" for i in range(n))
     fc = v + a + f"{cat}concat=n={n}:v=1:a=1[v][a]"
-    run([FFMPEG, "-y"] + inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-         "-c:a", "aac", "-b:a", "192k", out])
+    run_filter(inputs, fc,
+               ["-map", "[v]", "-map", "[a]",
+                "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", ENCODE_CRF,
+                "-c:a", "aac", "-b:a", "192k", out])
     if not os.path.exists(out):
         raise SystemExit("ffmpeg concat failed")
 
@@ -324,7 +391,13 @@ def _load_whisper():
     for dev, ct in tries:
         try:
             print(f"   โหลดโมเดล whisper {model} ({dev}/{ct}) — ครั้งแรกใช้เวลาดาวน์โหลด...", flush=True)
-            return WhisperModel(model, device=dev, compute_type=ct)
+            m = WhisperModel(model, device=dev, compute_type=ct)
+            if dev == "cuda":
+                # CUDA สร้างสำเร็จได้ทั้งที่ cublas/cudnn ยังไม่โหลด — warm-up สั้นๆ ให้โหลด lib จริง
+                # ถ้าเครื่องไม่มี CUDA runtime จะ error ตรงนี้ แล้ว fallback ไป CPU ได้ (ไม่พังตอนถอดเสียงจริง)
+                import numpy as _np
+                list(m.transcribe(_np.zeros(16000, dtype=_np.float32), language="th")[0])
+            return m
         except Exception as e:
             last = e
             print(f"   !! {dev}/{ct} ใช้ไม่ได้ ({str(e)[:80]}) — ลองตัวถัดไป", flush=True)
@@ -338,7 +411,7 @@ def transcribe(path, cache_json=None):
     if _MODEL is None:
         _MODEL = _load_whisper()
     segs, info = _MODEL.transcribe(path, language="th", word_timestamps=True,
-                                   vad_filter=True, beam_size=5)
+                                   vad_filter=True, beam_size=WHISPER_BEAM)
     total = float(getattr(info, "duration", 0) or 0)
     segments, words = [], []
     last_pct = -10
@@ -958,6 +1031,10 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
             except Exception: pass
 
     dc = json.load(open(os.path.join(out_dir, "draft_content.json"), encoding="utf-8"))
+    # ตั้ง canvas ของโปรเจกต์ให้ตรงกับความละเอียดจริงของวิดีโอ (คงแนวนอน/แนวตั้งตามต้นฉบับ)
+    # ไม่งั้นคลิปแนวนอนจะถูกวางในกรอบ 9:16 ของ template แล้วขึ้นแถบดำ (letterbox) ใน CapCut
+    cv = dc.setdefault("canvas_config", {})
+    cv["width"], cv["height"] = clip_w, clip_h
     clip_fwd = clip.replace("\\", "/")
     fp = resolve_font(brand); fs = brand["font_size"]; lc = brand["line_chars"]
 

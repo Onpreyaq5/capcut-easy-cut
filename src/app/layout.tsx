@@ -23,10 +23,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="th" className={`${notoThai.variable} ${plexThai.variable} ${inter.variable} ${space.variable}`} suppressHydrationWarning>
-      <body className="min-h-screen">
+      <body className="h-screen w-screen overflow-hidden flex flex-col">
         <ThemeSync />
         <Navbar />
-        <main className="pb-24">{children}</main>
+        <main className="flex-1 overflow-hidden">{children}</main>
       </body>
     </html>
   );

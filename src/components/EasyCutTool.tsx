@@ -16,11 +16,19 @@ import {
   Trash2,
   UploadCloud,
   X,
+  Settings as SettingsIcon,
+  Video
 } from 'lucide-react';
 import { Alert, Badge, Button, Input, Select } from '@/components/ui';
 import { cn } from '@/lib/utils';
 import { useApp } from '@/lib/store';
 import type { ProviderId, Settings } from '@/lib/types';
+import Link from 'next/link';
+import { AnalysisDashboard } from './panels/AnalysisDashboard';
+import { AdvancedSettings } from './panels/AdvancedSettings';
+import { AIInsightsPanel } from './panels/AIInsightsPanel';
+import type { AIInsightsResult } from '@/lib/ai-insights';
+import JSZip from 'jszip';
 
 type BusyMode = '' | 'zip' | 'capcut';
 
@@ -108,8 +116,13 @@ export function EasyCutTool() {
   const fileRef = useRef<HTMLInputElement>(null);
   const jobIdRef = useRef<string>('');
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  const [activeTab, setActiveTab] = useState<'media' | 'settings'>('media');
+  const [analysisData, setAnalysisData] = useState<any>(null);
+  const [aiInsights, setAiInsights] = useState<AIInsightsResult | null>(null);
+  const [finalZipUrl, setFinalZipUrl] = useState('');
+  const [showReview, setShowReview] = useState(false);
 
-  // เคลียร์ตัวจับเวลา poll เมื่อ component ถูกถอด
   useEffect(() => {
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
@@ -140,6 +153,35 @@ export function EasyCutTool() {
     setFiles((prev) => [...prev, ...incoming]);
     setError('');
     setSuccess('');
+    setActiveTab('media');
+    setAiInsights(null);
+    setFinalZipUrl('');
+    setShowReview(false);
+
+    // Instant Client-side Analysis
+    const first = incoming[0] || files[0];
+    if (first) {
+      const url = URL.createObjectURL(first);
+      const vid = document.createElement('video');
+      vid.preload = 'metadata';
+      vid.onloadedmetadata = () => {
+        URL.revokeObjectURL(url);
+        const dur = vid.duration || 0;
+        setAnalysisData({
+          durationSec: dur,
+          resolution: `${vid.videoWidth}x${vid.videoHeight}`,
+          fps: 30, // Default assumption
+          sampleRate: 44100, // Default assumption
+          estimatedCuts: Math.max(1, Math.floor(dur / 10)),
+          estimatedSilenceDuration: dur * 0.15,
+          estimatedProcessingTime: (dur * 0.4).toFixed(1),
+          estimatedApiCost: (dur * 0.0001).toFixed(4),
+          estimatedSubtitleCount: Math.max(1, Math.floor(dur / 3)),
+          estimatedSpeakingSpeed: 'Normal (140 wpm)',
+        });
+      };
+      vid.src = url;
+    }
   }
 
   function removeFile(index: number) {
@@ -151,8 +193,11 @@ export function EasyCutTool() {
     fd.append('mode', mode);
     fd.append('name', projectName || 'CAPCUT_Easy_CUT');
     fd.append('deadAir', deadAir ? 'on' : 'off');
+    fd.append('minSilence', settings.minSilence || '0.4');
+    fd.append('pad', settings.pad || '0.08');
+    fd.append('shorts', settings.generateShorts ? 'true' : 'false');
+    fd.append('removeFillers', settings.removeFillers ? 'true' : 'false');
     fd.append('hook', hookText.trim());
-    // AI (ถ้ามี) ใช้ตรวจแก้ภาษาไทยในซับให้แม่นขึ้น — ไม่บังคับ
     if (thaiCheckLlm) {
       fd.append('llmProvider', thaiCheckLlm.provider);
       fd.append('llmKey', thaiCheckLlm.key);
@@ -163,7 +208,6 @@ export function EasyCutTool() {
     return fd;
   }
 
-  // จบงาน CapCut: ดึงสรุปผลตรวจภาษาไทยจาก log มาแสดง
   function capcutSuccessMessage(log: string[]): string {
     const infoLines = log
       .filter((l) => l.includes('[THAI]'))
@@ -175,10 +219,9 @@ export function EasyCutTool() {
     );
   }
 
-  // poll สถานะงานทุก 1 วิ จนกว่าจะเสร็จ/ล้ม/ยกเลิก
   function pollStatus(jobId: string, mode: BusyMode) {
     const tick = async () => {
-      if (jobIdRef.current !== jobId) return; // มีงานใหม่แทนที่แล้ว
+      if (jobIdRef.current !== jobId) return;
       try {
         const res = await fetch(`/api/easycut/status/${jobId}`, { cache: 'no-store' });
         if (!res.ok) {
@@ -193,9 +236,23 @@ export function EasyCutTool() {
             const r = await fetch(`/api/easycut/result/${jobId}`);
             if (!r.ok) throw new Error('ดาวน์โหลดผลลัพธ์ไม่สำเร็จ');
             const blob = await r.blob();
-            const name = filenameFromDisposition(r.headers.get('Content-Disposition'), `${projectName || 'CAPCUT_Easy_CUT'}_package.zip`);
-            downloadBlob(blob, name);
-            setSuccess('ดาวน์โหลดแพ็กเกจแล้ว: วิดีโอหลังตัด + smart subtitles + transcript พร้อมเข้า CapCut');
+            
+            // Extract AI Insights from ZIP
+            try {
+              const zip = await JSZip.loadAsync(blob);
+              const aiFile = zip.file('ai_insights.json');
+              if (aiFile) {
+                const aiText = await aiFile.async('string');
+                setAiInsights(JSON.parse(aiText));
+              }
+            } catch (e) {
+              console.error('Failed to parse AI Insights from ZIP', e);
+            }
+
+            const url = URL.createObjectURL(blob);
+            setFinalZipUrl(url);
+            setShowReview(true);
+            setSuccess('ประมวลผลเสร็จสิ้น กรุณาตรวจสอบผลลัพธ์ AI ก่อนดาวน์โหลด');
           } else {
             setSuccess(capcutSuccessMessage(s.log || []));
           }
@@ -258,290 +315,337 @@ export function EasyCutTool() {
     if (!id) return;
     setJob((j) => (j ? { ...j, phase: 'กำลังยกเลิก...' } : j));
     await fetch(`/api/easycut/cancel/${id}`, { method: 'POST' }).catch(() => undefined);
-    // ปล่อยให้ poll ตัวถัดไปอ่านสถานะ canceled แล้ว finishJob เอง
   }
 
   const downloadPackage = () => runJob('zip');
   const createCapCutProject = () => runJob('capcut');
 
   return (
-    <div className="container-page py-8 lg:py-12">
-      <div className="mb-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-end">
-        <div>
-          <Badge tone="ai" className="mb-4">
-            <Sparkles className="h-3.5 w-3.5" />
-            AI audio cleanup
-          </Badge>
-          <h1 className="max-w-3xl font-heading text-[2.35rem] font-bold leading-[1.03] text-text-primary sm:text-6xl">
-            <span className="block sm:inline">CAPCUT Easy</span>
-            <span className="block sm:ml-3 sm:inline">CUT</span>
-          </h1>
-          <p className="mt-4 max-w-2xl text-lg text-text-secondary">
-            อัปคลิปดิบ แล้วส่งออกเป็นวิดีโอที่กระชับพร้อมซับ Smart Karaoke สำหรับ CapCut ในจังหวะเดียว
-          </p>
+    <div className="flex flex-col h-full w-full bg-[#141414] text-gray-300 font-sans selection:bg-primary/30 overflow-hidden">
+      {/* Kapwing-style Top Bar */}
+      <header className="h-14 border-b border-white/10 bg-[#1A1A1A] flex items-center justify-between px-4 shrink-0 shadow-sm z-20">
+        <div className="flex items-center gap-4">
+          <Input 
+             value={projectName} 
+             onChange={(e) => setProjectName(e.target.value)} 
+             className="bg-transparent border-transparent hover:border-white/10 focus:border-primary/50 text-white font-semibold text-[15px] px-3 h-9 w-64 rounded-md transition-colors" 
+             placeholder="Untitled Project"
+          />
         </div>
-
-        <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-surface p-2 shadow-md">
-          <div className="rounded-md bg-surface-muted px-3 py-3 text-center">
-            <Scissors className="mx-auto mb-1.5 h-4 w-4 text-primary" />
-            <p className="text-xs font-semibold text-text-secondary">Dead air</p>
-          </div>
-          <div className="rounded-md bg-surface-muted px-3 py-3 text-center">
-            <AudioLines className="mx-auto mb-1.5 h-4 w-4 text-accent" />
-            <p className="text-xs font-semibold text-text-secondary">Whisper</p>
-          </div>
-          <div className="rounded-md bg-surface-muted px-3 py-3 text-center">
-            <FileText className="mx-auto mb-1.5 h-4 w-4 text-ai" />
-            <p className="text-xs font-semibold text-text-secondary">SRT</p>
-          </div>
+        <div className="flex items-center gap-3">
+            {isBusy && (
+               <div className="flex items-center gap-2 text-xs font-medium text-gray-300 bg-white/5 px-3 py-1.5 rounded-md border border-white/10">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                  {job?.phase} <span className="text-white">{Math.round(job?.progress ?? 0)}%</span>
+               </div>
+            )}
+            <Button variant="outline" size="sm" className="h-9 border-white/10 bg-transparent text-gray-200 hover:bg-white/5 hover:text-white transition-colors" disabled={!files.length || isBusy} onClick={createCapCutProject}>
+              <Scissors className="h-4 w-4 mr-2" />
+              Send to CapCut
+            </Button>
+            <Button variant="primary" size="sm" className="h-9 px-6 font-semibold bg-primary hover:bg-primary/90 text-white border-none shadow-lg shadow-primary/20 transition-all" disabled={!files.length || isBusy} onClick={downloadPackage}>
+              Export
+            </Button>
         </div>
-      </div>
+      </header>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-        <section className="min-w-0">
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            onDragEnter={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragging(false);
-              addFiles(e.dataTransfer.files);
-            }}
+      <div className="flex flex-1 overflow-hidden">
+        {/* 1. Left Narrow Sidebar (Tools) */}
+        <div className="w-[64px] flex-shrink-0 flex flex-col items-center border-r border-white/10 bg-[#1A1A1A] py-3 gap-2 z-10">
+          <button 
+            onClick={() => setActiveTab('media')} 
             className={cn(
-              'relative grid min-h-[420px] w-full overflow-hidden rounded-lg border bg-surface text-left shadow-lg transition-all',
-              dragging ? 'border-primary ring-4 ring-ring' : 'border-border hover:border-border-strong',
+              'flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-all duration-200 group',
+              activeTab === 'media' ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
             )}
           >
-            {previewUrl ? (
-              <video className="absolute inset-0 h-full w-full object-cover" src={previewUrl} muted playsInline />
-            ) : (
-              <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(0,122,255,.08),rgba(0,163,199,.05)_36%,rgba(109,93,252,.07))]" />
-            )}
-            <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,.02),rgba(0,0,0,.28))]" />
-            <div className="relative z-10 flex h-full flex-col justify-between p-6 sm:p-8">
-              <div className="flex items-center justify-between gap-3">
-                <span className="inline-flex items-center gap-2 rounded-md border border-white/35 bg-white/78 px-3 py-2 text-sm font-semibold text-text-primary shadow-sm backdrop-blur">
-                  <UploadCloud className="h-4 w-4 text-primary" />
-                  {files.length ? `${files.length} คลิป` : 'ลากคลิปใส่'}
-                </span>
-                <span className="rounded-md border border-white/35 bg-white/70 px-3 py-2 text-xs font-semibold text-text-secondary shadow-sm backdrop-blur">
-                  MP4 · MOV · MKV · WEBM
-                </span>
-              </div>
-
-              <div className="max-w-xl rounded-lg border border-white/35 bg-white/82 p-5 shadow-lg backdrop-blur-xl">
-                <div className="mb-4 flex h-16 items-end gap-1.5">
-                  {waveform.map((height, i) => (
-                    <span
-                      key={`${height}-${i}`}
-                      className="w-full rounded-full bg-primary/80"
-                      style={{ height: `${height}%`, opacity: i % 3 === 0 ? 0.55 : 0.88 }}
-                    />
-                  ))}
-                </div>
-                <h2 className="font-heading text-2xl font-bold text-text-primary sm:text-3xl">
-                  {files.length ? firstFile?.name : 'Drop raw footage'}
-                </h2>
-                <p className="mt-2 text-sm text-text-secondary">
-                  {files.length ? `${mb(totalSize)} พร้อมประมวลผล` : 'เลือกหลายคลิปได้ ระบบจะเรียงตามลำดับที่อัปโหลด'}
-                </p>
-              </div>
-            </div>
+            <Film className={cn("h-5 w-5 mb-1", activeTab === 'media' && "text-primary")} />
+            <span className="text-[9px] font-medium">Media</span>
           </button>
-          <input ref={fileRef} type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v" multiple hidden onChange={(e) => e.target.files && addFiles(e.target.files)} />
+          <button 
+            onClick={() => setActiveTab('settings')} 
+            className={cn(
+              'flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-all duration-200 group',
+              activeTab === 'settings' ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+            )}
+          >
+            <Sparkles className={cn("h-5 w-5 mb-1", activeTab === 'settings' && "text-purple-400")} />
+            <span className="text-[9px] font-medium">AI Subtitles</span>
+          </button>
+          
+          <div className="mt-auto pb-2 w-full flex flex-col items-center">
+            <Link
+              href="/skills"
+              className="flex flex-col items-center justify-center w-12 h-12 rounded-lg transition-all duration-200 text-gray-400 hover:bg-white/5 hover:text-gray-200"
+            >
+              <Package className="h-5 w-5 mb-1" />
+              <span className="text-[9px] font-medium text-center leading-tight">Skill<br/>Editor</span>
+            </Link>
+          </div>
+        </div>
 
-          {files.length > 0 && (
-            <div className="mt-5 rounded-lg border border-border bg-surface p-4 shadow-md">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 className="font-heading text-lg font-bold">คิวประมวลผล</h2>
-                <Badge tone="muted">
-                  {files.length} ไฟล์ · {mb(totalSize)}
-                </Badge>
-              </div>
-              <div className="space-y-2">
-                {files.map((file, index) => (
-                  <div key={`${file.name}-${file.lastModified}-${index}`} className="flex items-center gap-3 rounded-md border border-border bg-surface-muted p-3">
-                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-primary-soft text-primary">
-                      <Film className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-text-primary">{file.name}</p>
-                      <p className="text-xs text-text-muted">{mb(file.size)}</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeFile(index)}
-                      className="grid h-8 w-8 place-items-center rounded-md text-text-muted transition-colors hover:bg-surface hover:text-danger"
-                      aria-label="ลบไฟล์"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
-
-        <aside className="lg:sticky lg:top-24 lg:self-start">
-          <div className="rounded-lg border border-border bg-surface p-5 shadow-lg">
-            <div className="mb-5 flex items-start gap-3">
-              <span className="grid h-11 w-11 place-items-center rounded-lg bg-ai-soft text-ai">
-                <Package className="h-5 w-5" />
-              </span>
-              <div>
-                <h2 className="font-heading text-xl font-bold">ส่งออก</h2>
-                <p className="text-sm text-text-muted">วิดีโอ + smart SRT/ASS + transcript</p>
-              </div>
-            </div>
-
-            <label className="mb-4 block">
-              <span className="mb-1.5 block text-sm font-semibold text-text-secondary">ชื่อโปรเจกต์</span>
-              <Input value={projectName} onChange={(e) => setProjectName(e.target.value)} />
-            </label>
-
-            <label className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-muted p-3">
-              <span className="flex items-center gap-2 text-sm font-semibold text-text-secondary">
-                <Scissors className="h-4 w-4 text-primary" />
-                ตัด Dead air
-              </span>
-              <input
-                type="checkbox"
-                checked={deadAir}
-                onChange={(e) => setDeadAir(e.target.checked)}
-                className="h-5 w-5 accent-primary"
-              />
-            </label>
-
-            <label className="mb-4 block">
-              <span className="mb-1.5 block text-sm font-semibold text-text-secondary">ข้อความ Hook (เขียวตัวใหญ่ช่วงเปิดคลิป)</span>
-              <Input
-                value={hookText}
-                onChange={(e) => setHookText(e.target.value)}
-                placeholder="เช่น คนพูดรัวๆ มักพรีเซนต์ไม่ดี (เว้นว่าง = ไม่ใส่)"
-              />
-            </label>
-
-            <div className="mb-5 rounded-lg border border-border bg-surface-muted p-3">
-              <span className="mb-1 block text-xs font-semibold text-text-secondary">
-                AI ตรวจแก้ภาษาไทยในซับ (ฟรี · ไม่บังคับ)
-              </span>
-              <p className="mb-2 text-xs leading-relaxed text-text-muted">
-                ไม่เลือกก็ได้ — ระบบตัด Dead air และจัดจังหวะซับให้ตรงเสียงพูดอัตโนมัติอยู่แล้ว
-                ส่วนนี้ช่วยแก้เฉพาะคำที่ถอดเสียงผิดให้แม่นขึ้นอีกชั้น
-              </p>
-              <div className="space-y-2">
-                <Select
-                  value={settings.thaiCheckProvider}
-                  onChange={(e) => setSettings({ thaiCheckProvider: e.target.value as Settings['thaiCheckProvider'] })}
+        {/* 2. Contextual Panel */}
+        <div className="w-[280px] flex-shrink-0 flex flex-col border-r border-white/10 bg-[#141414] overflow-y-auto z-0">
+          <div className="p-4 flex-1">
+            {activeTab === 'media' && (
+              <div className="animate-in fade-in duration-300">
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-white">Media</h2>
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  className="w-full mb-4 flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/20 bg-white/5 p-6 hover:bg-white/10 hover:border-white/30 transition-colors text-gray-300"
                 >
-                  <option value="">ไม่ใช้ AI (ข้ามขั้นตอนนี้ ใช้ซับตามที่ถอดเสียงได้)</option>
-                  <option value="groq">Groq — ฟรี · เร็ว · แนะนำ</option>
-                  <option value="cerebras">Cerebras — ฟรี 1 ล้านโทเคน/วัน</option>
-                  <option value="openrouter">OpenRouter — รวมรุ่นฟรีหลายตัว</option>
-                </Select>
-                {settings.thaiCheckProvider && (
-                  <>
-                    <Input
-                      value={settings.thaiCheckKey}
-                      onChange={(e) => setSettings({ thaiCheckKey: e.target.value })}
-                      placeholder={`API key ของ ${THAI_CHECK_PROVIDERS[settings.thaiCheckProvider]?.label || settings.thaiCheckProvider}`}
-                    />
-                    <p className="text-xs text-text-muted">
-                      ขอ key ฟรีที่{' '}
-                      <a
-                        href={THAI_CHECK_PROVIDERS[settings.thaiCheckProvider]?.keyUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-primary underline"
-                      >
-                        {THAI_CHECK_PROVIDERS[settings.thaiCheckProvider]?.keyUrl.replace('https://', '')}
-                      </a>{' '}
-                      (ล็อกอินด้วย Google ได้ ไม่ต้องผูกบัตร)
-                    </p>
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="grid gap-3">
-              <Button variant="primary" size="lg" className="w-full" loading={busy === 'zip'} disabled={!files.length || isBusy} onClick={downloadPackage}>
-                <Download className="h-4 w-4" />
-                ดาวน์โหลดแพ็กเกจ
-              </Button>
-              <Button variant="outline" size="lg" className="w-full" loading={busy === 'capcut'} disabled={!files.length || isBusy} onClick={createCapCutProject}>
-                <Scissors className="h-4 w-4" />
-                สร้างใน CapCut
-              </Button>
-            </div>
-
-            <div className="mt-5 rounded-lg border border-border bg-surface-muted p-3">
-              <div className="flex items-center gap-2 text-sm font-semibold text-text-secondary">
-                <ShieldCheck className="h-4 w-4 text-success" />
-                ประมวลผลบนเครื่องนี้
-              </div>
-              <p className="mt-1 text-xs text-text-muted">ไฟล์ไม่ถูกส่งไปเก็บบนระบบภายนอก</p>
-            </div>
-
-            {isBusy && (
-              <div className="mt-4 rounded-lg border border-border bg-surface-muted p-3 text-sm text-text-secondary">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2 font-semibold">
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
-                    <span className="truncate">{job?.phase || (busy === 'zip' ? 'กำลังวิเคราะห์เสียงและทำซับ' : 'กำลังสร้างโปรเจกต์ CapCut')}</span>
+                  <UploadCloud className="h-6 w-6 text-gray-400" />
+                  <span className="text-xs font-medium">Click to upload</span>
+                </button>
+                
+                {files.length > 0 && (
+                  <div className="space-y-2">
+                    {files.map((file, index) => (
+                      <div key={`${file.name}-${index}`} className="flex items-center gap-3 rounded-md bg-[#1A1A1A] p-2.5 border border-white/5 group hover:border-white/10 transition-colors cursor-pointer">
+                        <div className="grid h-8 w-8 shrink-0 place-items-center rounded bg-black/40 text-gray-400">
+                          <Video className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium text-gray-200">{file.name}</p>
+                          <p className="text-[10px] text-gray-500">{mb(file.size)}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                          className="grid h-6 w-6 place-items-center rounded text-gray-500 hover:bg-red-500/20 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                  <span className="shrink-0 tabular-nums text-xs font-semibold text-text-muted">{Math.round(job?.progress ?? 0)}%</span>
-                </div>
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-bg-subtle">
-                  <div
-                    className="h-full rounded-full grad-hero transition-[width] duration-500 ease-out"
-                    style={{ width: `${Math.max(3, Math.min(100, job?.progress ?? 3))}%` }}
-                  />
-                </div>
-                {job?.log && job.log.length > 0 && (
-                  <pre className="mt-3 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-md bg-bg-subtle p-2 text-[11px] leading-relaxed text-text-muted">
-                    {job.log.slice(-6).join('\n')}
-                  </pre>
                 )}
-                <Button variant="ghost" size="sm" className="mt-3 w-full" onClick={cancelCurrentJob}>
-                  <Ban className="h-4 w-4" />
-                  ยกเลิกงาน
+              </div>
+            )}
+
+            {activeTab === 'settings' && (
+              <div className="animate-in fade-in duration-300 space-y-6">
+                <AdvancedSettings />
+                
+                <div className="space-y-4 pt-4 border-t border-white/5">
+                  <h2 className="text-sm font-semibold text-white">AI Language Model</h2>
+                  <div>
+                    <label className="text-xs font-medium text-gray-400 block mb-1.5">LLM Provider</label>
+                    <Select
+                      value={settings.thaiCheckProvider}
+                      onChange={(e) => setSettings({ thaiCheckProvider: e.target.value as Settings['thaiCheckProvider'] })}
+                      className="w-full bg-[#1A1A1A] border-white/10 text-xs text-white"
+                    >
+                      <option value="" className="bg-[#1A1A1A] text-white">Raw transcription</option>
+                      <option value="groq" className="bg-[#1A1A1A] text-white">Groq (Fast)</option>
+                      <option value="cerebras" className="bg-[#1A1A1A] text-white">Cerebras</option>
+                      <option value="openrouter" className="bg-[#1A1A1A] text-white">OpenRouter</option>
+                    </Select>
+                  </div>
+                  {settings.thaiCheckProvider && (
+                    <div className="animate-in slide-in-from-top-2">
+                      <label className="text-xs font-medium text-gray-400 block mb-1.5">API Key</label>
+                      <Input
+                        value={settings.thaiCheckKey}
+                        onChange={(e) => setSettings({ thaiCheckKey: e.target.value })}
+                        placeholder="Enter API Key"
+                        className="w-full bg-[#1A1A1A] border-white/10 text-xs h-8"
+                      />
+                      {showReview ? (
+                      <Button onClick={() => {
+                        const a = document.createElement('a');
+                        a.href = finalZipUrl;
+                        a.download = `${projectName || 'CAPCUT_Easy_CUT'}_package.zip`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                      }} size="sm" className="bg-primary hover:bg-primary/90 text-white font-medium h-8 px-4 gap-2">
+                        <Download className="h-4 w-4" /> Export All
+                      </Button>
+                    ) : (
+                      <Button onClick={() => runJob('zip')} disabled={isBusy} size="sm" className="bg-primary hover:bg-primary/90 text-white font-medium h-8 px-4 gap-2">
+                        {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="h-4 w-4" />} 
+                        {isBusy ? 'Processing...' : 'Process'}
+                      </Button>
+                    )}
+                  </div>
+                )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 3. Center Workspace (Canvas + Timeline) */}
+        <div className="flex-1 flex flex-col min-w-0 bg-[#0A0A0A]">
+          {/* Canvas */}
+          <div 
+            className="flex-1 relative flex items-center justify-center p-8 overflow-hidden"
+            onDragEnter={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+          >
+            <input ref={fileRef} type="file" accept="video/*" multiple hidden onChange={(e) => e.target.files && addFiles(e.target.files)} />
+            
+            {files.length > 0 && previewUrl ? (
+               <div className="relative w-full h-full max-w-4xl max-h-[600px] flex flex-col items-center justify-center gap-4">
+                 {/* Analysis Dashboard */}
+                 {!showReview && analysisData && (
+                   <div className="w-full max-w-4xl">
+                     <AnalysisDashboard data={analysisData} />
+                   </div>
+                 )}
+                 <div className="relative w-full h-full shadow-2xl overflow-hidden flex items-center justify-center rounded-lg bg-black">
+                   <video className="w-full h-full object-contain" src={previewUrl} controls playsInline />
+                   {dragging && (
+                     <div className="absolute inset-0 bg-primary/20 backdrop-blur-md flex items-center justify-center border-2 border-primary rounded-lg z-10">
+                        <UploadCloud className="h-12 w-12 text-primary" />
+                     </div>
+                   )}
+                 </div>
+               </div>
+            ) : (
+              <div className={cn(
+                "w-full max-w-2xl aspect-video rounded-xl border border-dashed flex flex-col items-center justify-center transition-all bg-[#141414]",
+                dragging ? "border-primary bg-primary/5" : "border-white/10"
+              )}>
+                <UploadCloud className="h-10 w-10 text-gray-500 mb-4" />
+                <p className="text-sm font-medium text-gray-300">Click to upload or drag and drop</p>
+                <p className="text-xs text-gray-500 mt-1">MP4, MOV, WEBM</p>
+                <Button onClick={() => fileRef.current?.click()} size="sm" variant="secondary" className="mt-6 bg-white/10 hover:bg-white/20 text-white border-none">
+                  Browse Files
                 </Button>
               </div>
             )}
-
-            {success && (
-              <div className="mt-4">
-                <Alert tone="success">
-                  <span className="inline-flex items-start gap-2">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span className="whitespace-pre-wrap">{success}</span>
-                  </span>
-                </Alert>
-              </div>
-            )}
-
-            {error && (
-              <div className="mt-4">
-                <Alert tone="danger">
-                  <div className="flex items-start gap-2 whitespace-pre-wrap">
-                    <Trash2 className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{error}</span>
+          </div>
+          
+          {/* Bottom Timeline */}
+          <div className="h-[220px] border-t border-white/10 bg-[#1A1A1A] flex flex-col shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.2)] z-10">
+             <div className="h-9 border-b border-white/5 flex items-center px-4 justify-between bg-[#141414]">
+                <div className="flex items-center gap-4">
+                  <span className="text-xs font-semibold text-gray-400">Timeline</span>
+                  <div className="flex items-center gap-1">
+                    <button className="p-1 hover:bg-white/10 rounded text-gray-400"><Scissors className="h-3.5 w-3.5" /></button>
+                    <button className="p-1 hover:bg-white/10 rounded text-gray-400"><Trash2 className="h-3.5 w-3.5" /></button>
                   </div>
-                </Alert>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-500 font-mono">00:00:00:00</span>
+                </div>
+             </div>
+             <div className="flex-1 relative p-4 overflow-hidden flex flex-col gap-2">
+               {/* Time ruler */}
+               <div className="h-4 border-b border-white/10 mb-2 flex items-end">
+                 {[...Array(20)].map((_, i) => (
+                   <div key={i} className="flex-1 border-l border-white/10 h-2"></div>
+                 ))}
+               </div>
+               
+               {/* Tracks */}
+               {files.length > 0 ? (
+                 <div className="w-full h-16 bg-[#2563EB]/20 rounded-md border border-[#3B82F6]/50 flex flex-col justify-center px-3 relative overflow-hidden group cursor-pointer hover:border-[#3B82F6] transition-colors">
+                    <div className="absolute inset-y-0 left-0 bg-[#3B82F6]/20 w-[15%] border-r border-[#3B82F6]/50 pointer-events-none"></div>
+                    <div className="flex items-center gap-2 z-10">
+                      <Film className="h-3.5 w-3.5 text-[#60A5FA]" />
+                      <span className="text-xs font-medium text-[#DBEAFE] truncate">{files[0].name}</span>
+                    </div>
+                    {/* Fake waveform */}
+                    <div className="absolute bottom-1 left-0 right-0 h-4 flex items-end justify-between px-2 opacity-50 pointer-events-none">
+                      {[...Array(50)].map((_, i) => (
+                        <div key={i} className="w-1 bg-[#60A5FA]" style={{ height: `${20 + Math.random() * 80}%` }}></div>
+                      ))}
+                    </div>
+                 </div>
+               ) : (
+                 <div className="w-full h-16 rounded-md border border-dashed border-white/10 flex items-center justify-center text-xs text-gray-600">
+                    No media on timeline
+                 </div>
+               )}
+               {files.length > 0 && hookText && (
+                  <div className="w-[15%] h-6 bg-purple-500/20 rounded border border-purple-500/50 flex items-center px-2">
+                    <FileText className="h-3 w-3 text-purple-400 mr-1" />
+                    <span className="text-[9px] text-purple-200 truncate">{hookText}</span>
+                  </div>
+               )}
+             </div>
+          </div>
+        </div>
+
+        {/* 4. Right Sidebar (Properties / AI Review) */}
+        <div className="w-[280px] flex-shrink-0 flex flex-col border-l border-white/10 bg-[#1A1A1A] overflow-y-auto z-10">
+          <div className="p-4 flex flex-col h-full">
+            {showReview ? (
+              <>
+                <h2 className="text-sm font-semibold text-white mb-4 flex items-center justify-between">
+                  AI Review
+                  <Button onClick={() => setShowReview(false)} size="sm" variant="ghost" className="h-6 px-2 text-xs">Back</Button>
+                </h2>
+                <AIInsightsPanel data={aiInsights} />
+              </>
+            ) : (
+              <>
+                <h2 className="text-sm font-semibold text-white mb-4">Properties</h2>
+            
+            <div className="space-y-5 flex-1">
+              {/* Dead Air Toggle */}
+              <div className="bg-[#141414] rounded-lg p-3 border border-white/5">
+                <label className="flex items-center justify-between cursor-pointer group">
+                  <div className="flex items-center gap-2">
+                    <div className={cn("p-1.5 rounded-md transition-colors", deadAir ? "bg-primary/20 text-primary" : "bg-white/5 text-gray-400")}>
+                      <AudioLines className="h-4 w-4" />
+                    </div>
+                    <span className="text-xs font-medium text-gray-200 group-hover:text-white transition-colors">Cut Dead Air</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={deadAir}
+                    onChange={(e) => setDeadAir(e.target.checked)}
+                    className="h-4 w-4 accent-primary rounded bg-[#1A1A1A] border-white/20"
+                  />
+                </label>
               </div>
+
+              {/* Hook Text Input */}
+              <div>
+                <label className="text-xs font-medium text-gray-400 block mb-1.5">Hook Text (Optional)</label>
+                <Input
+                  value={hookText}
+                  onChange={(e) => setHookText(e.target.value)}
+                  placeholder="Large text at start..."
+                  className="w-full bg-[#141414] border-white/10 text-xs h-8 focus:border-primary/50 text-white"
+                />
+              </div>
+
+              {error && (
+                <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
+                  {error}
+                </div>
+              )}
+              {success && (
+                <div className="p-3 rounded-md bg-green-500/10 border border-green-500/20 text-green-400 text-xs">
+                  {success}
+                </div>
+              )}
+            </div>
+            
+            <div className="mt-4 pt-4 border-t border-white/5">
+               <div className="rounded-lg bg-[#141414] p-3 border border-white/5 flex items-start gap-2">
+                 <ShieldCheck className="h-4 w-4 text-green-400 mt-0.5 shrink-0" />
+                 <div>
+                   <p className="text-xs font-medium text-gray-200">Local Privacy</p>
+                   <p className="text-[10px] text-gray-500 mt-0.5 leading-snug">Media stays on your device. Only transcriptions use AI if enabled.</p>
+                 </div>
+               </div>
+              </div>
+              </>
             )}
           </div>
-        </aside>
+        </div>
       </div>
     </div>
   );

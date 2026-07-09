@@ -209,6 +209,9 @@ def main():
     ap.add_argument("--name", default="CAPCUT_Easy_CUT")
     ap.add_argument("--brand", default="")
     ap.add_argument("--no-dead-air", action="store_true")
+    ap.add_argument("--min-silence", type=float, default=None)
+    ap.add_argument("--pad", type=float, default=None)
+    ap.add_argument("--shorts", action="store_true")
     args = ap.parse_args()
 
     clips_folder = os.path.abspath(args.clips)
@@ -220,6 +223,11 @@ def main():
 
     cc.ensure_ffmpeg()   # ZIP mode ต้องมี ffmpeg (ไม่ต้องมี CapCut)
     brand = cc.load_brand(args.brand or None)
+    if args.min_silence is not None:
+        brand["min_silence"] = args.min_silence
+    if args.pad is not None:
+        brand["pad"] = args.pad
+        
     clips = read_clips(clips_folder)
     if not clips:
         raise SystemExit(f"ไม่พบไฟล์วิดีโอในโฟลเดอร์: {clips_folder}")
@@ -292,6 +300,11 @@ def main():
         shutil.copyfile(per_clip[0][0], combined)
     else:
         cc.concat_clips([p[0] for p in per_clip], combined)
+
+    if args.shorts:
+        print("สร้างวิดีโอแนวตั้ง (Shorts)...", flush=True)
+        shorts_path = os.path.join(out_dir, "CAPCUT_Easy_CUT_shorts.mp4")
+        cc.generate_shorts(combined, shorts_path)
 
     total_dur = cc.ffprobe_dur(combined) or processed_total
     out_w, out_h = cc.ffprobe_wh(combined)  # ความละเอียดจริงของ output -> ทำให้ซับ .ass สเกลถูกทั้งแนวตั้ง/แนวนอน

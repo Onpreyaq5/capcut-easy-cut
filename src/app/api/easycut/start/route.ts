@@ -110,6 +110,9 @@ export async function POST(req: NextRequest) {
       outDir: dirs.outDir,
       clipCount,
       deadAir: fields.deadAir !== 'off',
+      minSilence: fields.minSilence,
+      pad: fields.pad,
+      shorts: fields.shorts === 'true',
       hook: (fields.hook || '').trim(),
       script: fields.script || '',
       llm: {

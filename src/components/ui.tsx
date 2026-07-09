@@ -73,7 +73,7 @@ const fieldBase =
 
 export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
   function Input({ className, ...props }, ref) {
-    return <input ref={ref} className={cn(fieldBase, className)} {...props} />;
+    return <input ref={ref} className={cn(fieldBase, className)} autoComplete="off" suppressHydrationWarning {...props} />;
   },
 );
 

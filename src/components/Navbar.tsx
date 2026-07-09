@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 
 const links = [
   { href: '/', label: 'ตัดออโต้' },
+  { href: '/skills', label: 'Skill Editor' },
 ];
 
 export function Navbar() {
@@ -15,9 +16,11 @@ export function Navbar() {
   const theme = useApp((s) => s.settings.theme);
   const toggleTheme = useApp((s) => s.toggleTheme);
 
+  if (pathname === '/') return null;
+
   return (
     <header className="sticky top-0 z-50 border-b border-border/80 glass">
-      <nav className="container-page flex h-[68px] items-center justify-between gap-4">
+      <nav className="w-full px-4 flex h-[68px] items-center justify-between gap-4">
         <Link href="/" className="flex items-center gap-2.5 group">
           <span className="grid h-10 w-10 place-items-center rounded-lg grad-hero text-white shadow-glow-ai transition-transform group-hover:scale-105">
             <Scissors className="h-5 w-5" />

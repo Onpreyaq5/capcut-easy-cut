@@ -55,18 +55,52 @@ def resolve_font(brand):
     return (want or _FONT_FALLBACKS[0]).replace("\\", "/")
 
 
+def _exe_ok(exe):
+    try:
+        r = subprocess.run([exe, "-version"], capture_output=True, text=True,
+                           encoding="utf-8", errors="ignore")
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _discover_ffmpeg():
+    """หา ffmpeg.exe ในตำแหน่งติดตั้งยอดนิยมบน Windows เผื่อไม่อยู่ใน PATH ของโปรเซสนี้
+    (เช่น winget เพิ่งติดตั้งแล้ว PATH ยังไม่รีเฟรช หรือเว็บถูกเปิดจาก shell ที่ PATH ไม่ครบ)
+    คืน (ffmpeg, ffprobe) หรือ (None, None)"""
+    cand = []
+    if LOCALAPPDATA:
+        # 1) ตัวลิงก์ของ winget
+        cand.append(os.path.join(LOCALAPPDATA, "Microsoft", "WinGet", "Links", "ffmpeg.exe"))
+        # 2) โฟลเดอร์แพ็กเกจ Gyan.FFmpeg ของ winget
+        cand += glob.glob(os.path.join(LOCALAPPDATA, "Microsoft", "WinGet", "Packages",
+                                       "Gyan.FFmpeg*", "**", "ffmpeg.exe"), recursive=True)
+        # 3) ตัวที่ตัวติดตั้งอัตโนมัติของแอป (ensure_deps.ps1) ดาวน์โหลดไว้
+        cand += glob.glob(os.path.join(LOCALAPPDATA, "CAPCUT_Easy_CUT", "ffmpeg",
+                                       "**", "ffmpeg.exe"), recursive=True)
+    # 4) ตำแหน่งติดตั้งเองยอดนิยม
+    cand += glob.glob(r"C:\ffmpeg\**\ffmpeg.exe", recursive=True)
+    for c in cand:
+        probe = os.path.join(os.path.dirname(c), "ffprobe.exe")
+        if os.path.exists(c) and os.path.exists(probe) and _exe_ok(c) and _exe_ok(probe):
+            return c, probe
+    return None, None
+
+
 def ensure_ffmpeg():
-    """ตรวจว่าเรียก ffmpeg/ffprobe ได้ — ไม่ได้ให้ error ชัดเจนแทนที่จะพังกลางทาง"""
-    for exe, name in ((FFMPEG, "ffmpeg"), (FFPROBE, "ffprobe")):
-        try:
-            r = subprocess.run([exe, "-version"], capture_output=True, text=True,
-                               encoding="utf-8", errors="ignore")
-            if r.returncode != 0:
-                raise RuntimeError
-        except Exception:
-            raise SystemExit(
-                f"เรียก {name} ไม่ได้ — ต้องติดตั้ง ffmpeg ก่อน (winget install Gyan.FFmpeg) "
-                f"หรือแอปต้อง bundle ffmpeg มาด้วย (ตั้ง env EASYCUT_FFMPEG/EASYCUT_FFPROBE)")
+    """ตรวจว่าเรียก ffmpeg/ffprobe ได้ — ถ้าไม่อยู่ใน PATH จะค้นหาในเครื่องให้เองก่อน
+    หาไม่เจอจริงๆ ค่อย error พร้อมวิธีแก้ที่ทำตามได้ทันที"""
+    global FFMPEG, FFPROBE
+    if _exe_ok(FFMPEG) and _exe_ok(FFPROBE):
+        return
+    f, p = _discover_ffmpeg()
+    if f:
+        FFMPEG, FFPROBE = f, p
+        print(f"   ใช้ ffmpeg ที่พบในเครื่อง: {f}", flush=True)
+        return
+    raise SystemExit(
+        "เรียก ffmpeg ไม่ได้ — วิธีแก้: ปิดหน้าต่างนี้ แล้วดับเบิลคลิกไฟล์ \"⚙️ ติดตั้งครั้งแรก.bat\" "
+        "(อยู่ในโฟลเดอร์ tools\\capcut-auto) ระบบจะติดตั้ง ffmpeg ให้อัตโนมัติ เสร็จแล้วเปิดเว็บใหม่อีกครั้ง")
 
 
 def ensure_capcut():
@@ -339,6 +373,17 @@ def concat_clips(clips, out, target_wh=None):
                 "-c:a", "aac", "-b:a", "192k", out])
     if not os.path.exists(out):
         raise SystemExit("ffmpeg concat failed")
+
+
+def generate_shorts(src, out):
+    """สร้างวิดีโอแนวตั้ง (9:16) แบบ Center Crop อัตโนมัติ"""
+    # ใช้ filter: crop=ih*(9/16):ih เพื่อให้ความสูงคงที่ แต่กว้างแคบลงตรงกลาง
+    run_filter(["-i", src], "[0:v]crop=ih*(9/16):ih[v]",
+               ["-map", "[v]", "-map", "0:a",
+                "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", ENCODE_CRF,
+                "-c:a", "copy", out])
+    if not os.path.exists(out):
+        print(f"!! สร้าง Shorts ไม่สำเร็จสำหรับ {src}")
 
 
 # ---------- transcribe ----------
@@ -978,6 +1023,100 @@ def _rmtree_retry(path, tries=5, delay=0.3):
     )
 
 
+def _json_dump(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def _timeline_draft_content_paths(folder):
+    """คืน draft_content.json ทุกตัวในโปรเจกต์ CapCut
+    CapCut รุ่นใหม่มีทั้ง root draft_content.json และ Timelines/<id>/draft_content.json
+    ถ้าอัปเดตแค่ root แต่ timeline ยังชี้ media เก่า จะเปิดโปรเจกต์แล้วขึ้น Media Not Found."""
+    root_draft = os.path.abspath(os.path.join(folder, "draft_content.json"))
+    paths = [root_draft] if os.path.exists(root_draft) else []
+    timelines = os.path.join(folder, "Timelines")
+    if os.path.isdir(timelines):
+        for root, _, files in os.walk(timelines):
+            if "draft_content.json" in files:
+                p = os.path.abspath(os.path.join(root, "draft_content.json"))
+                if p not in paths:
+                    paths.append(p)
+    return paths
+
+
+def _sync_timeline_drafts(folder, draft_content):
+    """เขียน draft_content ที่สร้างใหม่ทับทุก timeline content เพื่อไม่ให้ template path เก่าหลุด."""
+    for p in _timeline_draft_content_paths(folder):
+        _json_dump(p, draft_content)
+
+
+def _draft_media_errors(folder):
+    """ตรวจ media references ที่ทำให้ CapCut เปิดแล้วแดง/หาไฟล์ไม่เจอ."""
+    errors = []
+    stale_markers = ("Users/USER", r"Users\USER", "hero_clean.mp4")
+    for p in _timeline_draft_content_paths(folder):
+        rel = os.path.relpath(p, folder)
+        try:
+            dc = json.load(open(p, encoding="utf-8"))
+        except Exception as e:
+            errors.append(f"{rel}: อ่าน JSON ไม่ได้ ({e})")
+            continue
+        videos = dc.get("materials", {}).get("videos", [])
+        if not videos:
+            errors.append(f"{rel}: ไม่มี materials.videos")
+        video_ids = set()
+        for i, v in enumerate(videos):
+            vid = v.get("id")
+            if vid:
+                video_ids.add(vid)
+            media_path = str(v.get("path") or "")
+            label = f"{rel}: materials.videos[{i}]"
+            if not media_path:
+                errors.append(f"{label} path ว่าง")
+                continue
+            if any(m in media_path for m in stale_markers):
+                errors.append(f"{label} ยังชี้ path template เก่า: {media_path}")
+                continue
+            if not os.path.exists(media_path):
+                errors.append(f"{label} ไฟล์ไม่มีอยู่จริง: {media_path}")
+        for ti, t in enumerate(dc.get("tracks", [])):
+            if t.get("type") != "video":
+                continue
+            for si, seg in enumerate(t.get("segments", [])):
+                mid = seg.get("material_id")
+                if mid not in video_ids:
+                    errors.append(f"{rel}: video track {ti} segment {si} material_id ไม่ตรงกับ videos: {mid}")
+
+    meta_path = os.path.join(folder, "draft_meta_info.json")
+    if os.path.exists(meta_path):
+        try:
+            meta = json.load(open(meta_path, encoding="utf-8"))
+            for grp in meta.get("draft_materials", []):
+                if grp.get("type") != 0:
+                    continue
+                for i, it in enumerate(grp.get("value", [])):
+                    if it.get("metetype") != "video":
+                        continue
+                    media_path = str(it.get("file_Path") or "")
+                    label = f"draft_meta_info.json: draft_materials[type=0][{i}]"
+                    if not media_path:
+                        errors.append(f"{label} file_Path ว่าง")
+                    elif any(m in media_path for m in stale_markers):
+                        errors.append(f"{label} ยังชี้ path template เก่า: {media_path}")
+                    elif not os.path.exists(media_path):
+                        errors.append(f"{label} ไฟล์ไม่มีอยู่จริง: {media_path}")
+        except Exception as e:
+            errors.append(f"draft_meta_info.json: อ่าน JSON ไม่ได้ ({e})")
+    return errors
+
+
+def _assert_draft_media_ok(folder):
+    errors = _draft_media_errors(folder)
+    if errors:
+        msg = "\n".join(" - " + e for e in errors[:12])
+        raise SystemExit("ตรวจ draft ไม่ผ่าน: media reference จะทำให้ CapCut ขึ้นสีแดง\n" + msg)
+
+
 def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
     """สร้าง CapCut draft (video track 1 segment + text captions + pop + zoom)"""
     ensure_capcut()
@@ -1008,12 +1147,19 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
     new_local = str(uuid.uuid4())
     vid.update({"path": clip_fwd, "material_name": os.path.basename(clip), "duration": clip_dur_us,
                 "width": clip_w, "height": clip_h, "has_audio": True, "local_material_id": new_local})
-    vtr = next(t for t in dc["tracks"] if t["type"] == "video")
-    vtr["segments"][0]["source_timerange"] = {"start": 0, "duration": clip_dur_us}
-    vtr["segments"][0]["target_timerange"] = {"start": 0, "duration": clip_dur_us}
+    dc["materials"]["videos"] = [vid]  # กัน template มี media เก่าค้างมากกว่าหนึ่งตัว
+    video_tracks = [t for t in dc["tracks"] if t["type"] == "video"]
+    vtr = video_tracks[0]
+    vseg = vtr["segments"][0]
+    vseg["material_id"] = vid["id"]
+    vseg["source_timerange"] = {"start": 0, "duration": clip_dur_us}
+    vseg["target_timerange"] = {"start": 0, "duration": clip_dur_us}
+    vtr["segments"] = [vseg]
+    for extra_vtr in video_tracks[1:]:
+        extra_vtr["segments"] = []
     if scene_kf:
-        vtr["segments"][0]["common_keyframes"] = zoom_keyframes(scene_kf, clip_dur_us)
-        vtr["segments"][0]["uniform_scale"] = {"on": False, "value": 1.0}
+        vseg["common_keyframes"] = zoom_keyframes(scene_kf, clip_dur_us)
+        vseg["uniform_scale"] = {"on": False, "value": 1.0}
     dc["duration"] = clip_dur_us
 
     ttr = next(t for t in dc["tracks"] if t["type"] == "text")
@@ -1120,7 +1266,7 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
     dc["materials"]["texts"] = texts
     dc["materials"]["material_animations"] = anims
     ttr["segments"] = segs
-    json.dump(dc, open(os.path.join(out_dir, "draft_content.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    _sync_timeline_drafts(out_dir, dc)
 
     meta = json.load(open(os.path.join(out_dir, "draft_meta_info.json"), encoding="utf-8"))
     now = int(time.time() * 1_000_000)
@@ -1136,5 +1282,6 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
                                "roughcut_time_range": {"duration": clip_dur_us, "start": 0}, "id": new_local})
         if grp.get("type") == 2:
             grp["value"] = []
-    json.dump(meta, open(os.path.join(out_dir, "draft_meta_info.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    _json_dump(os.path.join(out_dir, "draft_meta_info.json"), meta)
+    _assert_draft_media_ok(out_dir)
     return out_dir, os.path.basename(template), (clip_w, clip_h)

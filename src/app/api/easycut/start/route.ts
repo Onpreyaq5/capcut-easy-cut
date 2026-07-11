@@ -2,8 +2,23 @@ import { NextRequest, NextResponse } from 'next/server';
 import Busboy from 'busboy';
 import { Readable } from 'node:stream';
 import { createWriteStream, promises as fs } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { createJobDirs, startJob, type JobMode } from '@/lib/easycutJobs';
+
+// เช็คว่ามี CapCut เปิดค้างอยู่ไหม (Windows) — ถ้าสร้างโปรเจกต์ขณะ CapCut เปิด คลิปจะขึ้นสีแดง Media Not Found
+function capcutIsRunning(): boolean {
+  if (process.platform !== 'win32') return false;
+  try {
+    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq CapCut.exe', '/NH'], {
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    return out.includes('CapCut.exe');
+  } catch {
+    return false;
+  }
+}
 
 // ทำงานในเครื่อง: spawn python/ffmpeg/whisper + เขียนไฟล์ local
 export const runtime = 'nodejs';
@@ -101,6 +116,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'ยังไม่มีไฟล์วิดีโอให้ประมวลผล' }, { status: 400 });
     }
 
+    // โหมดสร้างโปรเจกต์ CapCut: ต้องปิด CapCut ก่อน ไม่งั้นคลิปขึ้นสีแดง Media Not Found
+    // เช็คทันทีก่อนเริ่มงาน (ไม่ต้องรอถอดเสียง 10 นาทีแล้วค่อยรู้)
+    if (finalMode === 'capcut' && capcutIsRunning()) {
+      await fs.rm(dirs.jobDir, { recursive: true, force: true }).catch(() => undefined);
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'CapCut กำลังเปิดอยู่ — กรุณาปิด CapCut ให้สนิทก่อนกดสร้าง แล้วลองใหม่\n' +
+            '(ถ้าสร้างขณะ CapCut เปิดค้าง คลิปจะขึ้นเป็นสีแดง Media Not Found เพราะ CapCut ล็อกโฟลเดอร์ไว้) ' +
+            'พอสร้างเสร็จค่อยเปิด CapCut โปรเจกต์จะอยู่บนสุด',
+        },
+        { status: 409 },
+      );
+    }
+
     const jobId = await startJob({
       mode: finalMode,
       name: fields.name || 'CAPCUT_Easy_CUT',
@@ -110,11 +141,10 @@ export async function POST(req: NextRequest) {
       outDir: dirs.outDir,
       clipCount,
       deadAir: fields.deadAir !== 'off',
-      minSilence: fields.minSilence,
-      pad: fields.pad,
-      shorts: fields.shorts === 'true',
       hook: (fields.hook || '').trim(),
       script: fields.script || '',
+      words: parseInt(fields.words || '0', 10) || 0,
+      cutFlubs: fields.cutFlubs === 'on',
       llm: {
         provider: (fields.llmProvider || '').trim(),
         key: (fields.llmKey || '').trim(),

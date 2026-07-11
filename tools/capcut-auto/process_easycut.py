@@ -209,9 +209,9 @@ def main():
     ap.add_argument("--name", default="CAPCUT_Easy_CUT")
     ap.add_argument("--brand", default="")
     ap.add_argument("--no-dead-air", action="store_true")
-    ap.add_argument("--min-silence", type=float, default=None)
-    ap.add_argument("--pad", type=float, default=None)
-    ap.add_argument("--shorts", action="store_true")
+    ap.add_argument("--words", type=int, default=0, help="จำนวนคำต่อ 1 ซับ (0 = อัตโนมัติ)")
+    ap.add_argument("--cut-flubs", action="store_true",
+                    help="ตัดคำพูดติดขัด/พูดผิดออก (เอ่อ อ่า, พูดซ้ำ)")
     args = ap.parse_args()
 
     clips_folder = os.path.abspath(args.clips)
@@ -223,11 +223,8 @@ def main():
 
     cc.ensure_ffmpeg()   # ZIP mode ต้องมี ffmpeg (ไม่ต้องมี CapCut)
     brand = cc.load_brand(args.brand or None)
-    if args.min_silence is not None:
-        brand["min_silence"] = args.min_silence
-    if args.pad is not None:
-        brand["pad"] = args.pad
-        
+    if args.words:
+        brand["word_max_words"] = args.words
     clips = read_clips(clips_folder)
     if not clips:
         raise SystemExit(f"ไม่พบไฟล์วิดีโอในโฟลเดอร์: {clips_folder}")
@@ -244,12 +241,25 @@ def main():
         dur = cc.ffprobe_dur(clip)
         original_total += dur
 
+        transcript = cc.transcribe(clip, cache_json=os.path.join(work_dir, f"words_{i:02d}.json"))
+        # ---- ตัดคำพูดติดขัด/พูดผิด (เอ่อ อ่า, พูดซ้ำ) ก่อนตัด dead air ----
+        flub_cuts = []
+        if args.cut_flubs:
+            flub_cuts = cc.merge_spans(
+                [(h["start"], h["end"]) for h in cc.detect_disfluencies(transcript["words"])]
+            )
+            if flub_cuts:
+                sec = sum(b - aa for aa, b in flub_cuts)
+                print(f"      ตัดคำพูดติดขัด/พูดผิด {len(flub_cuts)} ช่วง (~{sec:.1f}s)", flush=True)
+                transcript = cc.strip_words_in_cuts(transcript, flub_cuts)
+
         if args.no_dead_air:
-            keeps = [(0.0, dur)]
             silences = []
+            keeps = cc.compute_keeps(dur, [], brand["min_silence"], brand["pad"], extra_cuts=flub_cuts) \
+                if flub_cuts else [(0.0, dur)]
         else:
             silences = cc.detect_silence(clip)
-            keeps = cc.compute_keeps(dur, silences, brand["min_silence"], brand["pad"])
+            keeps = cc.compute_keeps(dur, silences, brand["min_silence"], brand["pad"], extra_cuts=flub_cuts)
 
         tight_path = os.path.join(tight_dir, f"{i + 1:02d}_tight.mp4")
         cc.tighten_clip(clip, keeps, tight_path)
@@ -257,7 +267,6 @@ def main():
         processed_total += tight_dur
 
         time_map = cc.make_timemap(keeps)
-        transcript = cc.transcribe(clip, cache_json=os.path.join(work_dir, f"words_{i:02d}.json"))
         sentence_captions = cc.captions_from_segments(
             transcript["segments"],
             time_map,
@@ -271,6 +280,7 @@ def main():
             brand["corrections"],
             transcript["segments"],
             brand,
+            max_words=brand.get("word_max_words", 0),
         )
         if not karaoke_captions:
             karaoke_captions = sentence_captions
@@ -300,11 +310,6 @@ def main():
         shutil.copyfile(per_clip[0][0], combined)
     else:
         cc.concat_clips([p[0] for p in per_clip], combined)
-
-    if args.shorts:
-        print("สร้างวิดีโอแนวตั้ง (Shorts)...", flush=True)
-        shorts_path = os.path.join(out_dir, "CAPCUT_Easy_CUT_shorts.mp4")
-        cc.generate_shorts(combined, shorts_path)
 
     total_dur = cc.ffprobe_dur(combined) or processed_total
     out_w, out_h = cc.ffprobe_wh(combined)  # ความละเอียดจริงของ output -> ทำให้ซับ .ass สเกลถูกทั้งแนวตั้ง/แนวนอน

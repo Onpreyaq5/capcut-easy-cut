@@ -7,7 +7,6 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
-import { generateAIInsights } from '@/lib/ai-insights';
 
 export type JobMode = 'zip' | 'capcut';
 export type JobStatus = 'running' | 'done' | 'error' | 'canceled';
@@ -32,7 +31,7 @@ export interface Job {
   curClip: number;
 }
 
-const TOOL_DIR = path.join('tools', 'capcut-auto');
+const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
 // เก็บไฟล์งานนอกโฟลเดอร์โปรเจกต์ที่ซิงก์ OneDrive (กัน ffmpeg/whisper ชนการซิงก์)
 const JOBS_ROOT = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'CAPCUT_Easy_CUT', 'jobs');
 const MAX_LOG = 400;
@@ -112,6 +111,11 @@ function ingestLine(j: Job, line: string) {
     const pct = parseInt(m[1], 10);
     j.phase = `ถอดเสียง คลิป ${j.curClip || 1}/${j.totalClips} — ${pct}%`;
     setClipProgress(j, pct / 100);
+    return;
+  }
+  if (/ตัดคำพูดติดขัด/.test(t)) {
+    j.phase = `ตัดคำพูดติดขัด/พูดผิด คลิป ${j.curClip || 1}/${j.totalClips}`;
+    setClipProgress(j, 1);
     return;
   }
   if (/ตัดช่วงเงียบ/.test(t)) {
@@ -197,9 +201,8 @@ export interface StartOptions {
   deadAir?: boolean; // zip
   hook?: string; // capcut
   script?: string; // capcut
-  minSilence?: string;
-  pad?: string;
-  shorts?: boolean;
+  words?: number; // จำนวนคำต่อ 1 ซับ (0/undefined = อัตโนมัติ)
+  cutFlubs?: boolean; // ตัดคำพูดติดขัด/พูดผิด (เอ่อ อ่า, พูดซ้ำ, retake/blooper)
   llm?: { provider?: string; key?: string; model?: string; base?: string };
 }
 
@@ -210,13 +213,13 @@ export async function startJob(opts: StartOptions): Promise<string> {
 
   let script: string;
   let args: string[];
+  const words = opts.words && opts.words > 0 ? String(opts.words) : '';
   if (opts.mode === 'zip') {
     script = path.join(TOOL_DIR, 'process_easycut.py');
     args = [script, '--clips', clipsDir, '--out', outDir, '--name', name, '--brand', path.join(TOOL_DIR, 'brand.json')];
     if (opts.deadAir === false) args.push('--no-dead-air');
-    if (opts.minSilence) args.push('--min-silence', opts.minSilence);
-    if (opts.pad) args.push('--pad', opts.pad);
-    if (opts.shorts) args.push('--shorts');
+    if (words) args.push('--words', words);
+    if (opts.cutFlubs) args.push('--cut-flubs');
   } else {
     script = path.join(TOOL_DIR, 'build_capcut.py');
     args = ['--clips', clipsDir, '--name', name, '--brand', path.join(TOOL_DIR, 'brand.json')];
@@ -226,6 +229,8 @@ export async function startJob(opts: StartOptions): Promise<string> {
       args.push('--script', sp);
     }
     if (opts.hook) args.push('--hook', opts.hook);
+    if (words) args.push('--words', words);
+    if (opts.cutFlubs) args.push('--cut-flubs');
     const l = opts.llm;
     if (l?.provider) args.push('--llm-provider', l.provider);
     if (l?.key) args.push('--llm-key', l.key);
@@ -251,7 +256,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
   jobs.set(id, job);
 
   const child = spawn('python', ['-u', ...args], {
-    cwd: process.cwd(),
+    cwd: TOOL_DIR,
     env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
   }) as ChildProcessWithoutNullStreams;
   job.child = child;
@@ -285,24 +290,6 @@ export async function startJob(opts: StartOptions): Promise<string> {
     }
     if (job.mode === 'zip') {
       try {
-        if (opts.llm?.provider && opts.llm?.key) {
-          job.phase = 'กำลังวิเคราะห์ AI Insights...';
-          try {
-            const transcriptPath = path.join(outDir, 'transcript.txt');
-            const transcript = await fs.readFile(transcriptPath, 'utf-8');
-            const insights = await generateAIInsights(transcript, opts.llm.provider, opts.llm.key, opts.llm.base);
-            if (insights) {
-              await fs.writeFile(
-                path.join(outDir, 'ai_insights.json'),
-                JSON.stringify(insights, null, 2),
-                'utf-8'
-              );
-            }
-          } catch (e) {
-            console.error('AI Insights failed:', e);
-          }
-        }
-
         job.phase = 'กำลังบีบอัดแพ็กเกจ';
         job.progress = Math.max(job.progress, 92);
         const zipPath = path.join(jobDir, `${name}_CAPCUT_Easy_CUT.zip`);

@@ -4,12 +4,11 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
-import { generateAIInsights } from '@/lib/ai-insights';
 
 export const runtime = 'nodejs';
 export const maxDuration = 900;
 
-const TOOL_DIR = path.join('tools', 'capcut-auto');
+const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
 // เก็บไฟล์งานนอกโฟลเดอร์โปรเจกต์ที่ซิงก์ OneDrive กัน ffmpeg/whisper ชนกับการซิงก์ระหว่างประมวลผล
 const JOBS_ROOT = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'CAPCUT_Easy_CUT', 'jobs');
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.m4v']);
@@ -58,13 +57,6 @@ export async function POST(req: NextRequest) {
     const form = await req.formData();
     const rawName = safeName((form.get('name') as string) || 'CAPCUT_Easy_CUT');
     const noDeadAir = form.get('deadAir') === 'off';
-    const minSilence = form.get('minSilence') as string;
-    const pad = form.get('pad') as string;
-    const shorts = form.get('shorts') === 'true';
-    const aiProvider = form.get('aiProvider') as string;
-    const aiKey = form.get('aiKey') as string;
-    const aiBaseUrl = form.get('aiBaseUrl') as string;
-
     const files = form
       .getAll('clips')
       .filter((f): f is File => f instanceof File)
@@ -105,11 +97,8 @@ export async function POST(req: NextRequest) {
       path.join(TOOL_DIR, 'brand.json'),
     ];
     if (noDeadAir) args.push('--no-dead-air');
-    if (minSilence) args.push('--min-silence', minSilence);
-    if (pad) args.push('--pad', pad);
-    if (shorts) args.push('--shorts');
 
-    const result = await runPython(args, process.cwd());
+    const result = await runPython(args, TOOL_DIR);
     if (result.code !== 0) {
       return NextResponse.json(
         {
@@ -119,24 +108,6 @@ export async function POST(req: NextRequest) {
         },
         { status: 500 },
       );
-    }
-
-    // AI Insights Processing
-    if (aiProvider && aiKey) {
-      try {
-        const transcriptPath = path.join(outDir, 'transcript.txt');
-        const transcript = await fs.readFile(transcriptPath, 'utf-8');
-        const insights = await generateAIInsights(transcript, aiProvider, aiKey, aiBaseUrl);
-        if (insights) {
-          await fs.writeFile(
-            path.join(outDir, 'ai_insights.json'),
-            JSON.stringify(insights, null, 2),
-            'utf-8'
-          );
-        }
-      } catch (err) {
-        console.error('Failed to generate AI insights during process:', err);
-      }
     }
 
     const zip = new JSZip();

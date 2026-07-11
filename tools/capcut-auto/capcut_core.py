@@ -164,6 +164,33 @@ def ensure_local_file(path):
         )
 
 
+def capcut_is_running():
+    """เช็คว่ามี CapCut เปิดค้างอยู่ไหม (Windows) — ถ้าเปิดค้างตอนสร้างโปรเจกต์
+    CapCut จะล็อกโฟลเดอร์ + แสดง state เก่าใน memory ทำให้คลิปขึ้นสีแดง 'Media Not Found'
+    แม้ไฟล์จริงจะถูกสร้างถูกต้องแล้วก็ตาม (ต้องปิด CapCut ให้สนิทก่อน แล้วเปิดใหม่)"""
+    if os.name != "nt":
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq CapCut.exe", "/NH"],
+                             capture_output=True, text=True, timeout=15).stdout
+        return "CapCut.exe" in out
+    except Exception:
+        return False
+
+
+def ensure_capcut_closed():
+    """fail เร็วพร้อมข้อความชัดเจน ถ้า CapCut เปิดค้างอยู่ — กันเคส 'คลิปสีแดง' ที่พบบ่อยที่สุด
+    (เรียกก่อนเริ่มงานหนัก เช่น ถอดเสียง จะได้ไม่ต้องรอ 10 นาทีแล้วค่อยรู้ว่าต้องปิด CapCut)"""
+    if capcut_is_running():
+        raise SystemExit(
+            "พบว่า CapCut กำลังเปิดอยู่ — ต้องปิด CapCut ให้สนิทก่อนสร้างโปรเจกต์\n"
+            "ถ้าสร้างขณะ CapCut เปิดค้าง คลิปจะขึ้นเป็นสีแดง 'Media Not Found' "
+            "เพราะ CapCut ล็อกโฟลเดอร์และค้างสถานะเดิมไว้\n"
+            "วิธีแก้: ปิดหน้าต่าง CapCut ทุกบาน (เช็คใน Task Manager ว่าไม่มี CapCut.exe เหลือ) "
+            "แล้วกดสร้างใหม่ พอเสร็จค่อยเปิด CapCut — โปรเจกต์จะอยู่บนสุด เปิดได้เลยไม่แดง"
+        )
+
+
 def resolve_effect_cache(resource_id, fallback=""):
     """หา path cache จริงของ effect/animation จาก resource_id บนเครื่อง user
     โครง: <LOCALAPPDATA>/CapCut/User Data/Cache/effect/<resource_id>/<hash>
@@ -300,13 +327,19 @@ def detect_silence(path, noise="-30dB", mind=0.30):
     return list(zip(starts, ends))
 
 
-def compute_keeps(clip_dur, silences, min_sil, pad):
+def compute_keeps(clip_dur, silences, min_sil, pad, extra_cuts=None):
+    """คำนวณช่วงที่จะ "เก็บไว้" (keeps) หลังตัดช่วงเงียบออก
+    extra_cuts: ช่วงเวลาเพิ่มเติมที่ต้องตัดทิ้งเสมอ (เช่น คำพูดติดขัด/พูดผิด) — ตัดเป๊ะตามช่วง"""
     cuts = []
     for ss, se in silences:
         if (se - ss) >= min_sil:
             cs, ce = ss + pad, se - pad
             if ce > cs:
                 cuts.append((cs, ce))
+    for cs, ce in (extra_cuts or []):
+        cs, ce = max(0.0, float(cs)), min(float(clip_dur), float(ce))
+        if ce > cs:
+            cuts.append((cs, ce))
     cuts.sort()
     keeps, cur = [], 0.0
     for cs, ce in cuts:
@@ -375,24 +408,25 @@ def concat_clips(clips, out, target_wh=None):
         raise SystemExit("ffmpeg concat failed")
 
 
-def generate_shorts(src, out):
-    """สร้างวิดีโอแนวตั้ง (9:16) แบบ Center Crop อัตโนมัติ"""
-    # ใช้ filter: crop=ih*(9/16):ih เพื่อให้ความสูงคงที่ แต่กว้างแคบลงตรงกลาง
-    run_filter(["-i", src], "[0:v]crop=ih*(9/16):ih[v]",
-               ["-map", "[v]", "-map", "0:a",
-                "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", ENCODE_CRF,
-                "-c:a", "copy", out])
-    if not os.path.exists(out):
-        print(f"!! สร้าง Shorts ไม่สำเร็จสำหรับ {src}")
-
-
 # ---------- transcribe ----------
+# บริบทช่วยให้ whisper เดาเป็นภาษาไทย ลดการหลอนเป็นอังกฤษ/ภาษาอื่นช่วงต้นคลิป
+_TH_INIT_PROMPT = "ต่อไปนี้เป็นคลิปวิดีโอที่พูดเป็นภาษาไทยทั้งหมด"
+# สระอำแบบแยกชิ้น (นิคหิต+สระอา) ที่ whisper มักถอดออกมา -> รวมเป็นสระอำตัวเดียว (ทํา -> ทำ, คํา -> คำ)
+_SARA_AM_FIX = re.compile("ํา")
+
+
+def _normalize_thai(text):
+    """ซ่อมข้อความไทยจาก whisper: รวมสระอำที่ถูกแยกชิ้น (ทํา->ทำ) — ปลอดภัย ไม่เปลี่ยนความหมาย"""
+    return _SARA_AM_FIX.sub("ำ", text or "")
+
+
 _MODEL = None
 def _load_whisper():
     """โหลดโมเดล whisper แบบยืดหยุ่น: มี GPU ใช้ GPU, ไม่มี fallback CPU
     ปรับได้ผ่าน env: EASYCUT_WHISPER_MODEL (เช่น small/medium/large-v3), EASYCUT_WHISPER_DEVICE"""
     from faster_whisper import WhisperModel
-    model = os.environ.get("EASYCUT_WHISPER_MODEL", "medium").strip() or "medium"
+    # default large-v3 = แม่นสุดสำหรับไทย (ลดการหลอนเป็นภาษาต่างประเทศ) — ตั้ง env เป็น medium/small ได้ถ้าต้องการเร็ว
+    model = os.environ.get("EASYCUT_WHISPER_MODEL", "large-v3").strip() or "large-v3"
     device = os.environ.get("EASYCUT_WHISPER_DEVICE", "auto").strip().lower() or "auto"
     tries = []
     if device in ("auto", "cuda"):
@@ -421,15 +455,22 @@ def transcribe(path, cache_json=None):
     global _MODEL
     if _MODEL is None:
         _MODEL = _load_whisper()
-    segs, info = _MODEL.transcribe(path, language="th", word_timestamps=True,
-                                   vad_filter=True, beam_size=WHISPER_BEAM)
+    segs, info = _MODEL.transcribe(
+        path, language="th", word_timestamps=True, vad_filter=True,
+        beam_size=max(WHISPER_BEAM, 5), best_of=5, temperature=0.0,
+        condition_on_previous_text=False,   # กันหลอนสะสม (ประโยคก่อนผิดแล้วลากผิดต่อ)
+        no_speech_threshold=0.6,
+        initial_prompt=_TH_INIT_PROMPT,     # บริบทไทย ลดการถอดเป็นภาษาต่างประเทศ
+    )
     total = float(getattr(info, "duration", 0) or 0)
     segments, words = [], []
     last_pct = -10
     for s in segs:
-        segments.append({"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text.strip()})
+        segments.append({"start": round(s.start, 3), "end": round(s.end, 3),
+                         "text": _normalize_thai(s.text.strip())})
         for w in (s.words or []):
-            words.append({"start": round(w.start, 3), "end": round(w.end, 3), "word": w.word})
+            words.append({"start": round(w.start, 3), "end": round(w.end, 3),
+                          "word": _normalize_thai(w.word)})
         if total > 0:
             pct = int(min(100, s.end / total * 100))
             if pct >= last_pct + 10:
@@ -724,10 +765,15 @@ def captions_from_words(words, tmap, corrections, segments=None, brand=None, min
 
 
 def captions_phrases_highlight(words, tmap, corrections, segments=None, brand=None,
-                               max_chars=18, max_gap=0.45, min_dur=0.30, style_name="normal"):
+                               max_chars=18, max_gap=0.45, min_dur=0.30, style_name="normal",
+                               max_words=0):
     """ซับสไตล์ครีเอเตอร์: วลีสั้น ตัวขาวคมชัด ไฮไลท์คำสำคัญสีเหลือง ขึ้นตามจังหวะพูดจริง
     style_name: "normal" = วลีล่างจอ | "word" = คำสั้นกลางจอ (แบบคลิปตัวอย่าง)
+    max_words: จำนวนคำสูงสุดต่อ 1 ซับ (0 = อัตโนมัติตามจำนวนตัวอักษร max_chars)
     meta {"style":..., "hl":[(a,b)..]}"""
+    # ถ้าผู้ใช้กำหนดจำนวนคำ ให้จำนวนคำเป็นตัวควบคุมหลัก (ขยายเพดานตัวอักษรไม่ให้ตัดก่อนครบคำ)
+    if max_words:
+        max_chars = max(max_chars, max_words * 30)
     keyword_words = keyword_set_from_segments(segments, corrections, brand)
     items, prev = [], None
     for w in merge_words_to_tokens(words):
@@ -763,7 +809,9 @@ def captions_phrases_highlight(words, tmap, corrections, segments=None, brand=No
         buf = []
 
     for it in items:
-        if buf and (it[0] - buf[-1][1] > max_gap
+        over_words = bool(max_words) and len(buf) >= max_words
+        if buf and (over_words
+                    or it[0] - buf[-1][1] > max_gap
                     or len(" ".join(x[2] for x in buf)) + 1 + len(it[2]) > max_chars):
             flush()
         buf.append(it)
@@ -909,15 +957,17 @@ def llm_thai_corrections(all_texts, provider, api_key, model, base_url=None):
         return {}
     system = (
         "คุณคือผู้ตรวจปรู๊ฟภาษาไทยของข้อความที่ถอดจากเสียงพูดด้วย AI "
-        "หน้าที่: หาเฉพาะคำที่สะกดผิด/ถอดเสียงผิด แล้วให้คำที่ถูกต้อง "
+        "หน้าที่: หาเฉพาะ 'คำเดี่ยว' ที่สะกดผิด/ถอดเสียงผิด แล้วให้คำที่ถูกต้อง "
         'ตอบเป็น JSON เท่านั้น: {"replacements": {"คำผิด": "คำถูก", ...}}'
     )
     user = (
         f"ข้อความถอดเสียง:\n{joined}\n\n"
-        "กติกา:\n- ระบุเฉพาะคำที่ผิดจริง (ชื่อเฉพาะ คำทับศัพท์ คำสะกดผิด) ไม่เกิน 20 คู่\n"
-        "- ห้ามเปลี่ยนคำที่ถูกอยู่แล้ว ห้ามเรียบเรียงประโยคใหม่\n"
-        "- คีย์ต้องเป็นคำที่ปรากฏในข้อความเป๊ะๆ\n"
-        '- ถ้าไม่มีคำผิดเลย ตอบ {"replacements": {}}'
+        "กติกาเข้มงวด (ผิดกติกา = ทิ้งทั้งคู่):\n"
+        "- แก้ได้เฉพาะ 'คำเดี่ยว' เท่านั้น ห้ามมีช่องว่างในคีย์หรือค่า (ห้ามแก้ทั้งวลี/ทั้งประโยค)\n"
+        "- ห้ามเรียบเรียงประโยคใหม่ ห้ามเปลี่ยนความหมาย ห้ามเปลี่ยนตัวเลข/เปอร์เซ็นต์\n"
+        "- ห้ามเปลี่ยนคำที่ถูกอยู่แล้ว (เช่น แคปคัท, ChatGPT ถือว่าถูก อย่าแตะ)\n"
+        "- คีย์ต้องเป็นคำที่ปรากฏในข้อความเป๊ะๆ ยาวไม่เกิน 15 ตัวอักษร ไม่เกิน 20 คู่\n"
+        '- ถ้าไม่มีคำผิดชัดเจน ตอบ {"replacements": {}}'
     )
     chain = [model] + [m for m in _FALLBACK_MODELS.get(provider, []) if m != model]
     for m in chain:
@@ -925,10 +975,160 @@ def llm_thai_corrections(all_texts, provider, api_key, model, base_url=None):
             data = _llm_json(provider, api_key, m, system, user, base_url)
             reps = data.get("replacements", {})
             return {str(k): str(v) for k, v in reps.items()
-                    if k and v and k != v and len(str(k)) >= 2}
+                    if _is_safe_correction(k, v)}
         except Exception as e:
             print(f"   !! ตรวจภาษาไทยด้วย {m} ไม่ได้ ({str(e)[:120]})", flush=True)
     return {}
+
+
+def _is_safe_correction(k, v):
+    """กรองคำแก้จาก AI ให้เหลือเฉพาะที่ปลอดภัย — กัน AI เขียนประโยคใหม่/เปลี่ยนตัวเลข/แก้มั่ว
+    (เจอบ่อยกับโมเดลเล็ก เช่น qwen 7b ที่ชอบ rewrite ทั้งประโยค)"""
+    k, v = str(k or "").strip(), str(v or "").strip()
+    if not k or not v or k == v:
+        return False
+    if len(k) < 2 or len(k) > 15:            # คำเดี่ยวเท่านั้น (คีย์ยาว = มักเป็นประโยค)
+        return False
+    if " " in k or " " in v:                  # มีช่องว่าง = วลี/ประโยค -> ทิ้ง
+        return False
+    if len(v) > len(k) + 6:                    # ค่ายาวกว่าคีย์มาก = มักขยายความ/rewrite
+        return False
+    if any(c.isdigit() for c in k + v):        # แตะตัวเลข = อันตราย (เปลี่ยนจำนวน/เปอร์เซ็นต์)
+        return False
+    # ต้องเป็นการ 'แก้สะกด' (คล้ายคำเดิม) ไม่ใช่ 'เปลี่ยนคำ/เขียนใหม่'
+    # ภาษาไทยไม่มีเว้นวรรค -> เช็คความยาวอย่างเดียวไม่พอ ต้องดูความคล้ายด้วย
+    import difflib
+    if difflib.SequenceMatcher(None, k, v).ratio() < 0.5:
+        return False
+    return True
+
+
+# ============================================================
+#  เอเจนต์ตัดคำพูดติดขัด / พูดผิด (disfluency · outtake · blooper · flub · slip)
+#  หลักการ 2 ชั้น:
+#   ชั้น 1 (ฮิวริสติก · ฟรี · เปิดตลอด): ตัดคำเติม (เอ่อ อ่า um) + พูดคำเดิมซ้ำติดกัน (false start / ติดอ่าง)
+#   ชั้น 2 (AI · ไม่บังคับ): ผู้เชี่ยวชาญตัดต่อ อ่าน transcript แล้วชี้ประโยคที่พูดผิดแล้วพูดใหม่ (retake)
+#                            หรือหลุด/ออกนอกเรื่อง (outtake/blooper) ให้ตัดทั้งประโยค เก็บเทคที่ดีที่สุด
+# ============================================================
+
+# คำเติม/คำลังเลภาษาไทย + สากล (normalize แล้วเทียบ)
+_TH_FILLERS = {"เอ่อ", "เอ้อ", "เออ", "เอ๋อ", "อ่า", "อ้า", "อาา", "เอิ่ม", "อึม", "อืม",
+               "อึ", "หืม", "เอ", "แอ่ม", "เอ่อๆ", "แบบว่า", "คือแบบ", "ประมาณว่า", "อ่าา", "เออๆ"}
+_EN_FILLERS = {"uh", "um", "umm", "uhh", "uhm", "er", "err", "erm", "hmm", "hmmm", "mmm", "eh"}
+
+
+def _norm_unit(s):
+    """ตัดช่องว่าง/เครื่องหมาย/ไม้ยมก ออก แล้วทำตัวพิมพ์เล็ก เพื่อเทียบคำ"""
+    return re.sub(r"[\s\.\,\!\?ฯๆ]+", "", str(s or "")).strip().lower()
+
+
+def merge_spans(spans, join_gap=0.12):
+    """รวมช่วงเวลาที่ทับ/ชิดกัน (ภายใน join_gap วินาที) ให้เป็นช่วงเดียว; คืนที่เรียงแล้ว"""
+    clean = sorted((float(a), float(b)) for a, b in spans if b is not None and float(b) > float(a))
+    out = []
+    for a, b in clean:
+        if out and a - out[-1][1] <= join_gap:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def detect_disfluencies(words, fillers=True, repeats=True, max_repeat_gap=0.9):
+    """ฮิวริสติก: หา span เวลา (คลิปต้นฉบับ) ของคำพูดติดขัดที่ควรตัดออก — ฟรี ไม่ง้อ AI
+    - filler: เอ่อ/อ่า/เอิ่ม/um/uh ฯลฯ -> ตัดทิ้ง
+    - false start / ติดอ่าง: พูดคำเดิมซ้ำติดกัน -> ตัด "ตัวก่อนหน้า" เก็บตัวหลัง (มักพูดชัดกว่า)
+    คืน list[dict] {start,end,reason}"""
+    toks = merge_words_to_tokens(words)
+    hits, fill = [], (_TH_FILLERS | _EN_FILLERS)
+    if fillers:
+        for w in toks:
+            if _norm_unit(w["word"]) in fill:
+                hits.append({"start": w["start"], "end": w["end"], "reason": "filler"})
+    if repeats:
+        i = 0
+        while i < len(toks) - 1:
+            a = _norm_unit(toks[i]["word"])
+            if len(a) >= 2:
+                j = i + 1
+                # ข้ามคำเติมที่คั่นกลาง เช่น "ผม เอ่อ ผม"
+                while j < len(toks) and _norm_unit(toks[j]["word"]) in fill:
+                    j += 1
+                if (j < len(toks) and _norm_unit(toks[j]["word"]) == a
+                        and toks[j]["start"] - toks[i]["end"] <= max_repeat_gap):
+                    hits.append({"start": toks[i]["start"], "end": toks[j]["start"], "reason": "repeat"})
+                    i = j
+                    continue
+            i += 1
+    return hits
+
+
+def llm_find_flubs(segments, provider, api_key, model, base_url=None):
+    """เอเจนต์ผู้เชี่ยวชาญตัดต่อระดับโลก: อ่าน transcript ระดับประโยคพร้อมเวลา
+    แล้วชี้ประโยคที่ควรตัดทิ้ง — พูดผิดแล้วพูดใหม่ (retake), หลุด/บลูปเปอร์, ออกนอกเรื่อง (outtake),
+    ประโยคที่ไม่จบความแล้วเริ่มใหม่ (false start ระดับประโยค)
+    คืน list[dict] {start,end,reason} (เวลาอ้างอิงคลิปต้นฉบับ)"""
+    segs = [s for s in (segments or []) if (s.get("text") or "").strip()]
+    if len(segs) < 2:
+        return []
+    lines = [f"[{i}] ({s['start']:.2f}-{s['end']:.2f}) {s['text'].strip()}" for i, s in enumerate(segs)]
+    system = (
+        "คุณคือบรรณาธิการตัดต่อวิดีโอระดับโลก เชี่ยวชาญการตัด outtake, blooper, flub, "
+        "false start, slip of the tongue และเทคที่พูดผิดแล้วพูดใหม่ (retake) ออกจากคลิปพูดคนเดียว "
+        "หน้าที่: อ่าน transcript ที่แบ่งเป็นประโยค (มีเลขบรรทัดและเวลา) แล้วเลือกเฉพาะบรรทัดที่ควร 'ตัดทิ้ง' "
+        'ตอบเป็น JSON เท่านั้น: {"remove": [{"line": <เลขบรรทัด>, "reason": "retake|blooper|outtake|false_start|filler"}]}'
+    )
+    user = (
+        "transcript:\n" + "\n".join(lines) + "\n\n"
+        "กติกาสำคัญ:\n"
+        "- ถ้าผู้พูดพูดประโยคหนึ่งแล้วพูดซ้ำอีกครั้งให้ดีขึ้น/แก้คำผิด ให้ตัด 'เทคก่อนหน้า' ที่พลาด เก็บเทคหลังที่สมบูรณ์\n"
+        "- ตัดบรรทัดที่เป็นการหลุด พูดพลาด ออกนอกเรื่อง คำพูดค้างไม่จบความแล้วขึ้นประโยคใหม่\n"
+        "- อย่าตัดเนื้อหาที่ดีอยู่แล้ว ถ้าไม่แน่ใจให้ 'เก็บไว้' (ตัดเฉพาะที่มั่นใจว่าเสีย)\n"
+        "- ห้ามตัดจนใจความขาดหาย เป้าหมายคือคลิปลื่นไหลเป็นธรรมชาติ\n"
+        '- ถ้าไม่มีบรรทัดไหนต้องตัดเลย ตอบ {"remove": []}'
+    )
+    chain = [model] + [m for m in _FALLBACK_MODELS.get(provider, []) if m != model]
+    for m in chain:
+        try:
+            data = _llm_json(provider, api_key, m, system, user, base_url)
+            out = []
+            for it in data.get("remove", []):
+                try:
+                    idx = int(it.get("line"))
+                except Exception:
+                    continue
+                if 0 <= idx < len(segs):
+                    out.append({"start": float(segs[idx]["start"]), "end": float(segs[idx]["end"]),
+                                "reason": str(it.get("reason", "flub"))})
+            return out
+        except Exception as e:
+            print(f"   !! เอเจนต์ตัดคำพูดผิดด้วย {m} ไม่ได้ ({str(e)[:120]})", flush=True)
+    return []
+
+
+def strip_words_in_cuts(data, cuts, overlap=0.5):
+    """เอาคำ/ประโยคที่อยู่ในช่วงที่ถูกตัด (cuts) ออกจากผลถอดเสียง เพื่อไม่ให้ขึ้นเป็นซับค้าง
+    overlap: สัดส่วนของคำที่ทับกับช่วงตัดเกินเท่านี้ถือว่าถูกตัด (0.5 = เกินครึ่ง)"""
+    spans = merge_spans([(c["start"], c["end"]) if isinstance(c, dict) else (c[0], c[1]) for c in cuts])
+    if not spans:
+        return data
+
+    def _mid_removed(st, en):
+        mid = (st + en) / 2.0
+        return any(a <= mid <= b for a, b in spans)
+
+    def _removed(st, en):
+        st, en = float(st), float(en)
+        dur = max(1e-6, en - st)
+        ov = 0.0
+        for a, b in spans:
+            ov += max(0.0, min(en, b) - max(st, a))
+        return ov / dur >= overlap or _mid_removed(st, en)
+
+    nd = dict(data)
+    nd["words"] = [w for w in data.get("words", []) if not _removed(w["start"], w["end"])]
+    nd["segments"] = [s for s in data.get("segments", []) if not _mid_removed(s["start"], s["end"])]
+    return nd
 
 
 # ---------- keyframe transition (zoom punch) ----------
@@ -1140,7 +1340,16 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
     # ไม่งั้นคลิปแนวนอนจะถูกวางในกรอบ 9:16 ของ template แล้วขึ้นแถบดำ (letterbox) ใน CapCut
     cv = dc.setdefault("canvas_config", {})
     cv["width"], cv["height"] = clip_w, clip_h
-    clip_fwd = clip.replace("\\", "/")
+    # คัดลอกไฟล์วิดีโอเข้าไปเก็บใน "โฟลเดอร์โปรเจกต์" เลย (self-contained) — แก้ "Media Not Found" ถาวร
+    # เดิมชี้ไฟล์ที่อยู่นอกโปรเจกต์ (_capcut_work/<hash>) ซึ่งถูกลบ/ย้าย/regenerate hash ใหม่แล้วหลุดได้
+    # ตอนนี้ media อยู่คู่กับ draft: ตราบใดที่โปรเจกต์ยังอยู่ ไฟล์ก็อยู่ CapCut หาเจอเสมอ
+    media_dir = os.path.join(out_dir, "local_media")
+    os.makedirs(media_dir, exist_ok=True)
+    internal_clip = os.path.join(media_dir, os.path.basename(clip))
+    shutil.copy2(clip, internal_clip)
+    _clear_readonly(internal_clip)
+    ensure_local_file(internal_clip)
+    clip_fwd = internal_clip.replace("\\", "/")
     fp = resolve_font(brand); fs = brand["font_size"]; lc = brand["line_chars"]
 
     vid = dc["materials"]["videos"][0]

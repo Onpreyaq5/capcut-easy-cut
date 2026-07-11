@@ -3,6 +3,7 @@
   "font_size": 12.0,
   "line_chars": 15,
   "max_chars": 20,
+  "word_max_words": 0,
   "min_silence": 0.40,
   "y_pos": -0.42,
   "keyword_y_pos": -0.42,

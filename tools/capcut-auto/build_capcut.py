@@ -54,6 +54,9 @@ def main():
     ap.add_argument("--brand", default="")
     ap.add_argument("--no-transitions", action="store_true")
     ap.add_argument("--hook", default="", help='ข้อความ hook เขียวล่างจอ ("auto" = ใช้ประโยคแรก)')
+    ap.add_argument("--words", type=int, default=0, help="จำนวนคำต่อ 1 ซับ (0 = อัตโนมัติ)")
+    ap.add_argument("--cut-flubs", action="store_true",
+                    help="ตัดคำพูดติดขัด/พูดผิดออก (เอ่อ อ่า, พูดซ้ำ, retake/blooper); มี --llm-* จะใช้ AI ตัด retake ด้วย")
     ap.add_argument("--llm-provider", default="", help="ตรวจแก้ภาษาไทยในซับ: groq/cerebras/openrouter/gemini/openai/anthropic/local")
     ap.add_argument("--llm-key", default="")
     ap.add_argument("--llm-model", default="")
@@ -62,7 +65,10 @@ def main():
 
     cc.ensure_ffmpeg()   # เช็ก ffmpeg ก่อน
     cc.ensure_capcut()   # เช็ก CapCut ติดตั้ง (fail เร็วก่อนถอดเสียงหนักๆ)
+    cc.ensure_capcut_closed()   # กันเคสคลิปสีแดง: ต้องปิด CapCut ก่อน (เช็คตั้งแต่ต้น ไม่ต้องรอถอดเสียงจบ)
     brand = cc.load_brand(a.brand or None)
+    if a.words:
+        brand["word_max_words"] = a.words
     folder = os.path.abspath(a.clips)
     clips = sorted([os.path.join(folder, f) for f in os.listdir(folder)
                     if os.path.splitext(f)[1].lower() in VIDEO_EXT
@@ -107,23 +113,38 @@ def main():
         except Exception as e:
             print(f"[THAI] ตรวจภาษาไทยไม่สำเร็จ (ข้าม): {str(e)[:200]}", flush=True)
 
+    ai_flubs = a.cut_flubs and ok_llm   # เปิดตัดคำพูดผิด + มี LLM => ใช้ AI ตัด retake ระดับประโยคด้วย
     per_clip = []
     for i, clip in enumerate(clips):
         print(f"[{i+1}/{len(clips)}] {os.path.basename(clip)}", flush=True)
         dur = cc.ffprobe_dur(clip)
-        keeps = cc.compute_keeps(dur, cc.detect_silence(clip), brand["min_silence"], brand["pad"])
+        data = cc.transcribe(clip, cache_json=os.path.join(work, f"words_{i:02d}.json"))
+        # ---- เอเจนต์ตัดคำพูดติดขัด/พูดผิด (ก่อนตัด dead air เพื่อรวมช่วงตัดเข้าด้วยกัน) ----
+        flub_cuts = []
+        if a.cut_flubs:
+            hits = cc.detect_disfluencies(data["words"])
+            if ai_flubs:
+                hits += cc.llm_find_flubs(data["segments"], a.llm_provider, a.llm_key,
+                                          a.llm_model, a.llm_base or None)
+            flub_cuts = cc.merge_spans([(h["start"], h["end"]) for h in hits])
+            if flub_cuts:
+                sec = sum(b - aa for aa, b in flub_cuts)
+                print(f"      ตัดคำพูดติดขัด/พูดผิด {len(flub_cuts)} ช่วง (~{sec:.1f}s)", flush=True)
+                data = cc.strip_words_in_cuts(data, flub_cuts)
+        keeps = cc.compute_keeps(dur, cc.detect_silence(clip), brand["min_silence"], brand["pad"],
+                                 extra_cuts=flub_cuts)
         tight = os.path.join(work, f"tight_{i:02d}.mp4")
         cc.tighten_clip(clip, keeps, tight)
         tdur = cc.ffprobe_dur(tight)
         tmap = cc.make_timemap(keeps)
-        data = cc.transcribe(clip, cache_json=os.path.join(work, f"words_{i:02d}.json"))
         if script_texts and i < len(script_texts) and script_texts[i]:
             caps = cc.captions_from_script(script_texts[i], data["words"], tmap,
                                            brand["max_chars"], brand["corrections"])
         else:
             # สไตล์คลิปตัวอย่าง: คำสั้นขึ้นกลางจอทีละคำ ตามจังหวะพูด
             caps = cc.captions_phrases_highlight(data["words"], tmap, brand["corrections"], data["segments"], brand,
-                                                 max_chars=brand.get("word_max_chars", 12), style_name="word")
+                                                 max_chars=brand.get("word_max_chars", 12), style_name="word",
+                                                 max_words=brand.get("word_max_words", 0))
             if not caps:
                 caps = cc.captions_from_segments(data["segments"], tmap,
                                                  brand["max_chars"], brand["corrections"])

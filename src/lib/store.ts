@@ -31,11 +31,6 @@ export const DEFAULT_SETTINGS: Settings = {
   brandName: 'ธัญกิจ ปุ๋ยภัณฑ์',
   visualStyle: 'ฟิล์มโฆษณาแบรนด์พรีเมียม แสงทองตอนเช้า เกรดสีฟิล์มอุ่น เลนส์ละลายหลังนุ่ม กล้องเคลื่อนนุ่มนวล สมจริงมีมิติ อารมณ์อบอุ่น บรรยากาศทุ่งนาไทย',
   theme: 'light',
-  minSilence: '0.4',
-  pad: '0.08',
-  removeFillers: false,
-  generateShorts: false,
-  detectSpeakers: false,
 };
 
 function freshProject(): Project {

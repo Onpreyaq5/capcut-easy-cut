@@ -32,7 +32,13 @@ if errorlevel 1 (
 )
 
 REM ---------- 3) ติดตั้งแพ็กเกจเว็บครั้งแรก ----------
-if not exist "node_modules\" (
+set "NEED_NPM_INSTALL=0"
+if not exist "node_modules\" set "NEED_NPM_INSTALL=1"
+if "%NEED_NPM_INSTALL%"=="0" (
+  node -e "const pkg=require('./package.json');function wanted(n){const r=(pkg.dependencies&&pkg.dependencies[n])||(pkg.devDependencies&&pkg.devDependencies[n])||'';const m=String(r).match(/\d+/);return m?m[0]:''}function got(n){try{return String(require('./node_modules/'+n+'/package.json').version).split('.')[0]}catch(e){return ''}}for(const n of ['next','eslint','eslint-config-next']){const w=wanted(n);if(w&&got(n)!==w)process.exit(1)}" >nul 2>nul
+  if errorlevel 1 set "NEED_NPM_INSTALL=1"
+)
+if "%NEED_NPM_INSTALL%"=="1" (
   echo [3/4] ติดตั้งแพ็กเกจเว็บครั้งแรก ^(ใช้เวลาสักครู่^)...
   call npm install
   echo.

@@ -8,7 +8,7 @@ import path from 'node:path';
 export const runtime = 'nodejs';
 export const maxDuration = 600;
 
-const TOOL_DIR = path.join('tools', 'capcut-auto');
+const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
 // ไฟล์งาน (คลิปที่ตัดแล้ว) ต้องอยู่นอกโฟลเดอร์โปรเจกต์ที่ซิงก์ OneDrive —
 // ไม่งั้น OneDrive จะแปลงเป็นไฟล์ "cloud-only" (placeholder) ทีหลัง ทำให้ CapCut หาไฟล์ไม่เจอ ขึ้นสีแดง
 const JOBS_ROOT = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'CAPCUT_Easy_CUT', 'jobs');
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
 
     const result = await new Promise<{ code: number; out: string }>((resolve) => {
       const child = spawn('python', [py, ...args], {
-        cwd: process.cwd(),
+        cwd: TOOL_DIR,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       });
       let out = '';

@@ -36,12 +36,6 @@ export interface Settings {
   brandName: string;
   visualStyle: string;
   theme: 'light' | 'dark';
-  /** EasyCut Advanced Settings */
-  minSilence: string;
-  pad: string;
-  removeFillers: boolean;
-  generateShorts: boolean;
-  detectSpeakers: boolean;
 }
 
 /** ไฟล์อ้างอิงที่ผู้ใช้แนบ (รูป/วิดีโอ) */

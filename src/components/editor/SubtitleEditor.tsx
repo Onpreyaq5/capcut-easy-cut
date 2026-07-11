@@ -12,6 +12,7 @@ import {
   Download,
   Loader2,
   FileVideo,
+  Scissors,
 } from 'lucide-react';
 import {
   SubLine,
@@ -71,6 +72,8 @@ export default function SubtitleEditor() {
     setVideoName('demo.mp4');
     setAllWords(demo);
     setLines(groupWords(demo, DEFAULT_STYLE.wordsPerLine));
+    // โหลดเป็น File ด้วย เพื่อให้ปุ่ม "ส่งเข้า CapCut" ใช้งานได้ในโหมด demo
+    fetch('/demo.mp4').then((r) => r.blob()).then((b) => setVideoFile(new File([b], 'demo.mp4', { type: 'video/mp4' }))).catch(() => undefined);
   }, []);
 
   const onPickVideo = (f: File) => {
@@ -139,6 +142,27 @@ export default function SubtitleEditor() {
     if (v) v.currentTime = Math.max(0, Math.min(dur || 0, sec));
   };
 
+  const [building, setBuilding] = useState(false);
+  const sendToCapcut = async () => {
+    if (!videoFile || !hasSub) return;
+    setBuilding(true);
+    setProgress('กำลังสร้างโปรเจกต์ CapCut… (ปิด CapCut ให้สนิทก่อนนะ)');
+    try {
+      const fd = new FormData();
+      fd.append('video', videoFile);
+      fd.append('name', (videoName.replace(/\.[^.]+$/, '') || 'CAPCUT_Easy_CUT') + '_Editor');
+      fd.append('project', JSON.stringify({ lines, style }));
+      const res = await fetch('/api/easycut/editor-build', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'สร้างไม่สำเร็จ');
+      setProgress(`✅ สร้างโปรเจกต์ CapCut "${data.name}" แล้ว (${data.captions} แคปชัน) — เปิด CapCut โปรเจกต์จะอยู่บนสุด`);
+    } catch (e) {
+      setProgress('❌ ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBuilding(false);
+    }
+  };
+
   const exportSRT = () => {
     const srt = toSRT(lines, style.noSpace);
     const blob = new Blob([srt], { type: 'text/plain;charset=utf-8' });
@@ -188,6 +212,9 @@ export default function SubtitleEditor() {
           </button>
           <button onClick={exportSRT} disabled={!hasSub} className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-secondary hover:border-primary/50 disabled:opacity-40">
             <Download size={14} /> ส่งออก SRT
+          </button>
+          <button onClick={sendToCapcut} disabled={!hasSub || !videoFile || building} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary/90 disabled:opacity-50">
+            {building ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />} ส่งเข้า CapCut
           </button>
         </div>
       </div>

@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 
 const links = [
   { href: '/', label: 'ตัดออโต้' },
+  { href: '/editor', label: 'ตัวแก้ซับ' },
 ];
 
 export function Navbar() {

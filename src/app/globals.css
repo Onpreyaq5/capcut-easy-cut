@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ฟอนต์ไทยที่ bundle มา (self-host — ใช้ในพรีวิวตัวแก้ซับ ให้เห็นฟอนต์จริงแบบเดียวกับที่ส่งเข้า CapCut) */
+@font-face { font-family: 'Kanit'; src: url('/fonts/Kanit.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Prompt'; src: url('/fonts/Prompt.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Sarabun'; src: url('/fonts/Sarabun.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'ChakraPetch'; src: url('/fonts/ChakraPetch.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Mitr'; src: url('/fonts/Mitr.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'BaiJamjuree'; src: url('/fonts/BaiJamjuree.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Krub'; src: url('/fonts/Krub.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'Kodchasan'; src: url('/fonts/Kodchasan.ttf') format('truetype'); font-weight: 700; font-display: swap; }
+
 :root {
   --bg: #f5f5f7;
   --bg-subtle: #eceef2;

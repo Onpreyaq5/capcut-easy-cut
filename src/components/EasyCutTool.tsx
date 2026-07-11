@@ -100,6 +100,31 @@ const STEPS = [
   { n: '4', t: 'เรนเดอร์ / CapCut', icon: FileText },
 ] as const;
 
+// แถวเลือกไฟล์ SFX
+function SfxRow({ label, file, onPick, onClear }: { label: string; file: File | null; onPick: () => void; onClear: () => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onPick}
+        className="shrink-0 rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs font-semibold text-text-secondary transition-colors hover:border-primary/50"
+      >
+        {label}
+      </button>
+      {file ? (
+        <span className="flex min-w-0 flex-1 items-center gap-1 text-xs text-text-muted">
+          <span className="truncate">{file.name}</span>
+          <button type="button" onClick={onClear} className="shrink-0 hover:text-danger" aria-label="ลบ">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      ) : (
+        <span className="text-xs text-text-muted">ยังไม่ได้เลือก</span>
+      )}
+    </div>
+  );
+}
+
 export function EasyCutTool() {
   const [files, setFiles] = useState<File[]>([]);
   const [projectName, setProjectName] = useState('CAPCUT_Easy_CUT');
@@ -113,6 +138,17 @@ export function EasyCutTool() {
   const [bgmFile, setBgmFile] = useState<File | null>(null);
   const [removeVocals, setRemoveVocals] = useState(true);
   const bgmRef = useRef<HTMLInputElement>(null);
+  // SFX (วูช / เปิดคลิป / เน้นคำ)
+  const [whooshFile, setWhooshFile] = useState<File | null>(null);
+  const [introFile, setIntroFile] = useState<File | null>(null);
+  const [dingFiles, setDingFiles] = useState<File[]>([]);
+  const whooshRef = useRef<HTMLInputElement>(null);
+  const introRef = useRef<HTMLInputElement>(null);
+  const dingRef = useRef<HTMLInputElement>(null);
+  // Hook: โลโก้ + ข้อความใหญ่
+  const [hookLogos, setHookLogos] = useState<File[]>([]);
+  const [hookTitle, setHookTitle] = useState('');
+  const hookLogoRef = useRef<HTMLInputElement>(null);
   const settings = useApp((s) => s.settings);
   const setSettings = useApp((s) => s.setSettings);
   const thaiCheckLlm = pickThaiCheckLlm(settings);
@@ -176,6 +212,13 @@ export function EasyCutTool() {
       fd.append('removeVocals', removeVocals ? 'on' : 'off');
       fd.append('bgmVolume', '0.12');
     }
+    // SFX
+    if (whooshFile) fd.append('whoosh', whooshFile);
+    if (introFile) fd.append('intro', introFile);
+    dingFiles.forEach((f) => fd.append('ding', f));
+    // Hook (โลโก้ + ข้อความ)
+    hookLogos.forEach((f) => fd.append('hookLogo', f));
+    if (hookTitle.trim()) fd.append('hookTitle', hookTitle.trim());
     // AI (ถ้ามี) ใช้ตรวจแก้ภาษาไทยในซับให้แม่นขึ้น — ไม่บังคับ
     if (thaiCheckLlm) {
       fd.append('llmProvider', thaiCheckLlm.provider);
@@ -509,6 +552,49 @@ export function EasyCutTool() {
                   ตัดเสียงร้องออก เหลือแต่ดนตรี (AI)
                 </label>
               )}
+            </div>
+
+            {/* ซาวด์เอฟเฟกต์ (SFX) — อัปโหลดเอง */}
+            <div className="mb-4 rounded-lg border border-border bg-surface-muted p-3">
+              <span className="mb-1 flex items-center gap-2 text-sm font-semibold text-text-secondary">
+                <Sparkles className="h-4 w-4 text-primary" />
+                ซาวด์เอฟเฟกต์ (ไม่บังคับ)
+              </span>
+              <p className="mb-2 text-xs leading-relaxed text-text-muted">
+                อัปโหลดเสียงเอง — วูช (ตรงรอยต่อคลิป) · เปิดคลิป · เน้นคำ (ใส่หลายไฟล์สลับเสียงได้)
+              </p>
+              <div className="space-y-2">
+                <SfxRow label="💨 วูช (รอยต่อ)" file={whooshFile} onPick={() => whooshRef.current?.click()} onClear={() => setWhooshFile(null)} />
+                <SfxRow label="🎬 เปิดคลิป" file={introFile} onPick={() => introRef.current?.click()} onClear={() => setIntroFile(null)} />
+                <SfxRow label={`✨ เน้นคำ${dingFiles.length ? ` (${dingFiles.length})` : ''}`} file={dingFiles[0] ?? null} onPick={() => dingRef.current?.click()} onClear={() => setDingFiles([])} />
+              </div>
+              <input ref={whooshRef} type="file" accept="audio/*" hidden onChange={(e) => setWhooshFile(e.target.files?.[0] ?? null)} />
+              <input ref={introRef} type="file" accept="audio/*" hidden onChange={(e) => setIntroFile(e.target.files?.[0] ?? null)} />
+              <input ref={dingRef} type="file" accept="audio/*" multiple hidden onChange={(e) => setDingFiles(e.target.files ? Array.from(e.target.files) : [])} />
+            </div>
+
+            {/* Hook เปิดคลิป — โลโก้ + ข้อความ (ฝังลงวิดีโอ) */}
+            <div className="mb-4 rounded-lg border border-border bg-surface-muted p-3">
+              <span className="mb-1 flex items-center gap-2 text-sm font-semibold text-text-secondary">
+                <Film className="h-4 w-4 text-primary" />
+                Hook เปิดคลิป (ไม่บังคับ)
+              </span>
+              <p className="mb-2 text-xs leading-relaxed text-text-muted">
+                อัปโหลดโลโก้ 1–2 อัน + ใส่ข้อความใหญ่ — ระบบฝังลงช่วงเปิดคลิป (สไลด์เด้งเข้า)
+              </p>
+              <Input value={hookTitle} onChange={(e) => setHookTitle(e.target.value)} placeholder="ข้อความใหญ่ เช่น ตัดต่อ (เว้นว่าง = ไม่ใส่)" />
+              <input ref={hookLogoRef} type="file" accept="image/*" multiple hidden onChange={(e) => setHookLogos(e.target.files ? Array.from(e.target.files).slice(0, 2) : [])} />
+              <div className="mt-2 flex items-center gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={() => hookLogoRef.current?.click()}>
+                  <UploadCloud className="h-4 w-4" />
+                  {hookLogos.length ? `โลโก้ ${hookLogos.length} รูป` : 'อัปโหลดโลโก้'}
+                </Button>
+                {hookLogos.length > 0 && (
+                  <button type="button" onClick={() => setHookLogos([])} className="text-text-muted hover:text-danger" aria-label="ลบโลโก้">
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
 
             <label className="mb-4 block">

@@ -1564,6 +1564,53 @@ def make_text_image(text, out_path, font_path=None, size=200, stroke=16,
     return out_path
 
 
+def bake_hook(video_in, video_out, logo_paths, title, dur_sec, canvas_wh, work_dir):
+    """ฝังโลโก้ (กล่องขาว) + ข้อความ 'ตัดต่อ' ลงช่วงเปิดคลิป dur_sec วินาที (สไลด์เด้งเข้า) ด้วย ffmpeg
+    logo_paths: list ไฟล์โลโก้ (1-2 อัน วางมุมซ้าย-ขวา) ; title: ข้อความใหญ่บนสุด (เว้นว่างได้)
+    คืน path วิดีโอที่ฝังแล้ว (พิกเซลเป๊ะ)"""
+    from PIL import Image
+    W, H = canvas_wh
+    W -= W % 2; H -= H % 2
+    hookdir = os.path.join(work_dir, "_hook"); os.makedirs(hookdir, exist_ok=True)
+    LOGO = int(W * 0.42)                       # โลโก้กว้าง ~42%
+    layers = []                                # (path, w, h, x, y)
+    if title and title.strip():
+        timg = make_text_image(title.strip(), os.path.join(hookdir, "txt_top.png"), size=200, stroke=18)
+        tw0, th0 = Image.open(timg).size
+        TW = int(W * 0.62); TH = int(TW * th0 / tw0)
+        layers.append((timg, TW, TH, (W - TW) // 2, 70))
+    boxes = [make_logo_box(lp, os.path.join(hookdir, f"box{i}.png"), box=480, pad=40, radius=70)
+             for i, lp in enumerate(logo_paths[:2]) if lp and os.path.exists(lp)]
+    if len(boxes) == 1:
+        layers.append((boxes[0], LOGO, LOGO, (W - LOGO) // 2, 250))
+    elif len(boxes) >= 2:
+        layers.append((boxes[0], LOGO, LOGO, 24, 250))
+        layers.append((boxes[1], LOGO, LOGO, W - 24 - LOGO, 250))
+    if not layers:
+        return video_in
+
+    en = f"enable=lt(t\\,{dur_sec})"
+    def sy(t):  # สไลด์เด้งเข้าจากบน 0.4วิ (escape comma ทุกตัว)
+        return f"if(lt(t\\,0.4)\\,{t}-280*pow(1-t/0.4\\,2)\\,{t})"
+    inputs = ["-i", video_in]
+    for path, *_ in layers:
+        inputs += ["-i", path]
+    scale_parts = [f"[{i+1}]scale={w}:{h}[s{i}]" for i, (_, w, h, _, _) in enumerate(layers)]
+    over_parts, cur = [], "0"
+    for i, (_, _, _, x, y) in enumerate(layers):
+        out = "v" if i == len(layers) - 1 else f"t{i}"
+        over_parts.append(f"[{cur}][s{i}]overlay=x={x}:y={sy(y)}:{en}[{out}]")
+        cur = out
+    fc = ";".join(scale_parts + over_parts)
+    r = run([FFMPEG, "-y"] + inputs + ["-filter_complex", fc, "-map", "[v]", "-map", "0:a",
+             "-c:v", "libx264", "-preset", ENCODE_PRESET, "-crf", "18", "-pix_fmt", "yuv420p",
+             "-c:a", "copy", video_out])
+    if not os.path.exists(video_out):
+        print(f"      !! ฝัง hook ไม่สำเร็จ ใช้คลิปเดิม ({(r.stderr or '')[-200:]})", flush=True)
+        return video_in
+    return video_out
+
+
 def _photo_material_from(base_video_mat, path, wh, dur_us=10800000000):
     """สร้าง photo material โดยยืมโครงจาก video material เดิม (กันฟิลด์ขาด) แล้วสลับเป็นรูป"""
     m = copy.deepcopy(base_video_mat)

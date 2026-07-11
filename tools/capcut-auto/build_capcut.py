@@ -60,6 +60,12 @@ def main():
     ap.add_argument("--bgm", default="", help="ไฟล์เพลงประกอบ (จะคลอทั้งคลิป)")
     ap.add_argument("--remove-vocals", action="store_true", help="ตัดเสียงร้องออกจากเพลง BGM (เหลือแต่ดนตรี)")
     ap.add_argument("--bgm-volume", type=float, default=0.12, help="ระดับเสียงเพลงประกอบ 0-1")
+    ap.add_argument("--whoosh", default="", help="SFX ตรงรอยต่อคลิป (วูช)")
+    ap.add_argument("--intro", default="", help="SFX ตอนเปิดคลิป")
+    ap.add_argument("--ding", default="", help="SFX เน้นคำสำคัญ (ใส่หลายไฟล์คั่นด้วย ',' เพื่อสลับเสียง)")
+    ap.add_argument("--hook-logo", default="", help="ภาพโลโก้ Hook (1-2 ไฟล์ คั่นด้วย ',') ฝังลงช่วงเปิดคลิป")
+    ap.add_argument("--hook-title", default="", help="ข้อความใหญ่บน Hook (เช่น 'ตัดต่อ')")
+    ap.add_argument("--hook-dur", type=float, default=5.0, help="ความยาว Hook (วินาที)")
     ap.add_argument("--llm-provider", default="", help="ตรวจแก้ภาษาไทยในซับ: groq/cerebras/openrouter/gemini/openai/anthropic/local")
     ap.add_argument("--llm-key", default="")
     ap.add_argument("--llm-model", default="")
@@ -176,13 +182,30 @@ def main():
         hd = min(brand.get("hook_dur", 5.5), total_dur)
         all_caps.insert(0, (0.0, hd, cc.correct_thai(hook_text, brand["corrections"]), {"style": "hook"}))
 
-    # ---- เพลงประกอบ (ไม่บังคับ) — ตัดเสียงร้องได้ ----
-    sfx = None
+    # ---- เพลง/SFX ประกอบ (ไม่บังคับ) ----
+    sfx = {}
     if a.bgm and os.path.exists(a.bgm):
-        sfx = {"bgm": {"path": a.bgm, "volume": max(0.0, min(1.0, a.bgm_volume)),
-                       "remove_vocals": bool(a.remove_vocals)}}
+        sfx["bgm"] = {"path": a.bgm, "volume": max(0.0, min(1.0, a.bgm_volume)),
+                      "remove_vocals": bool(a.remove_vocals)}
         print(f"เพลงประกอบ: {os.path.basename(a.bgm)}"
               f"{' (ตัดเสียงร้อง)' if a.remove_vocals else ''}", flush=True)
+    if a.whoosh and os.path.exists(a.whoosh):
+        sfx["whoosh"] = {"path": a.whoosh, "volume": 0.7}
+    if a.intro and os.path.exists(a.intro):
+        sfx["intro"] = {"path": a.intro, "volume": 0.9}
+    ding_files = [p for p in a.ding.split(",") if p.strip() and os.path.exists(p.strip())]
+    if ding_files:
+        sfx["ding"] = {"paths": [p.strip() for p in ding_files], "volume": 0.5, "min_gap": 4.0, "max_dur": 0.5}
+    sfx = sfx or None
+
+    # ---- Hook: ฝังโลโก้ + ข้อความลงช่วงเปิดคลิป (ffmpeg) ----
+    hook_logos = [p.strip() for p in a.hook_logo.split(",") if p.strip() and os.path.exists(p.strip())]
+    if hook_logos or a.hook_title.strip():
+        cw, ch = cc.ffprobe_wh(combined)
+        print("ฝัง Hook เปิดคลิป (โลโก้ + ข้อความ)...", flush=True)
+        combined = cc.bake_hook(combined, os.path.join(work, "combined_hook.mp4"),
+                                hook_logos, a.hook_title, a.hook_dur, (cw, ch), work)
+        total_dur = cc.ffprobe_dur(combined)
 
     print("เขียนโปรเจกต์ CapCut...", flush=True)
     out_dir, tpl, (w, h) = cc.build_draft(combined, a.name, all_caps,

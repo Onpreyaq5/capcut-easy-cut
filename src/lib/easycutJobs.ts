@@ -206,6 +206,11 @@ export interface StartOptions {
   bgm?: string; // path ไฟล์เพลงประกอบ (capcut)
   removeVocals?: boolean; // ตัดเสียงร้องออกจากเพลง BGM
   bgmVolume?: number; // ระดับเสียงเพลง 0-1
+  whoosh?: string; // path SFX วูช (รอยต่อคลิป)
+  intro?: string; // path SFX เปิดคลิป
+  ding?: string[]; // paths SFX เน้นคำ (สลับเสียง)
+  hookLogos?: string[]; // paths ภาพโลโก้ Hook (1-2)
+  hookTitle?: string; // ข้อความใหญ่บน Hook
   llm?: { provider?: string; key?: string; model?: string; base?: string };
 }
 
@@ -239,6 +244,11 @@ export async function startJob(opts: StartOptions): Promise<string> {
       if (opts.removeVocals) args.push('--remove-vocals');
       if (opts.bgmVolume && opts.bgmVolume > 0) args.push('--bgm-volume', String(opts.bgmVolume));
     }
+    if (opts.whoosh) args.push('--whoosh', opts.whoosh);
+    if (opts.intro) args.push('--intro', opts.intro);
+    if (opts.ding && opts.ding.length) args.push('--ding', opts.ding.join(','));
+    if (opts.hookLogos && opts.hookLogos.length) args.push('--hook-logo', opts.hookLogos.join(','));
+    if (opts.hookTitle) args.push('--hook-title', opts.hookTitle);
     const l = opts.llm;
     if (l?.provider) args.push('--llm-provider', l.provider);
     if (l?.key) args.push('--llm-key', l.key);

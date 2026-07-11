@@ -37,6 +37,10 @@ interface Parsed {
   fields: Record<string, string>;
   clipCount: number;
   bgmPath?: string; // ไฟล์เพลงประกอบที่อัปโหลด (ถ้ามี)
+  whooshPath?: string;
+  introPath?: string;
+  dingPaths: string[];
+  hookLogoPaths: string[];
 }
 
 // สตรีม multipart ลงดิสก์ตรง ๆ ด้วย busboy (ไม่โหลดไฟล์ทั้งก้อนเข้า RAM เหมือน req.formData())
@@ -52,27 +56,56 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
     const writes: Promise<void>[] = [];
     let clipCount = 0;
     let bgmPath: string | undefined;
+    let whooshPath: string | undefined;
+    let introPath: string | undefined;
+    const dingPaths: string[] = [];
+    const hookLogoPaths: string[] = [];
     let failed: Error | null = null;
+
+    // เซฟ stream ลงไฟล์ + รอจนเสร็จ
+    const saveTo = (stream: NodeJS.ReadableStream, dest: string) => {
+      const ws = createWriteStream(dest);
+      writes.push(
+        new Promise<void>((res, rej) => {
+          ws.on('finish', () => res());
+          ws.on('error', rej);
+          stream.on('error', rej);
+        }),
+      );
+      stream.pipe(ws);
+    };
 
     bb.on('field', (name, val) => {
       fields[name] = val;
     });
 
     bb.on('file', (name, stream, info) => {
-      // เพลงประกอบ (BGM) — 1 ไฟล์
+      // เพลง/SFX/โลโก้ hook (ไฟล์ประกอบ)
       if (name === 'bgm') {
-        const ext = extOf(info.filename || '') || '.mp3';
-        const dest = path.join(clipsDir, `_bgm${ext}`);
-        bgmPath = dest;
-        const ws = createWriteStream(dest);
-        writes.push(
-          new Promise<void>((res, rej) => {
-            ws.on('finish', () => res());
-            ws.on('error', rej);
-            stream.on('error', rej);
-          }),
-        );
-        stream.pipe(ws);
+        bgmPath = path.join(clipsDir, `_bgm${extOf(info.filename || '') || '.mp3'}`);
+        saveTo(stream, bgmPath);
+        return;
+      }
+      if (name === 'whoosh') {
+        whooshPath = path.join(clipsDir, `_whoosh${extOf(info.filename || '') || '.mp3'}`);
+        saveTo(stream, whooshPath);
+        return;
+      }
+      if (name === 'intro') {
+        introPath = path.join(clipsDir, `_intro${extOf(info.filename || '') || '.mp3'}`);
+        saveTo(stream, introPath);
+        return;
+      }
+      if (name === 'ding') {
+        const p = path.join(clipsDir, `_ding${dingPaths.length}${extOf(info.filename || '') || '.mp3'}`);
+        dingPaths.push(p);
+        saveTo(stream, p);
+        return;
+      }
+      if (name === 'hookLogo') {
+        const p = path.join(clipsDir, `_hooklogo${hookLogoPaths.length}${extOf(info.filename || '') || '.png'}`);
+        hookLogoPaths.push(p);
+        saveTo(stream, p);
         return;
       }
       if (name !== 'clips') {
@@ -108,7 +141,7 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
         return;
       }
       Promise.all(writes)
-        .then(() => resolve({ fields, clipCount, bgmPath }))
+        .then(() => resolve({ fields, clipCount, bgmPath, whooshPath, introPath, dingPaths, hookLogoPaths }))
         .catch(reject);
     });
 
@@ -125,7 +158,8 @@ export async function POST(req: NextRequest) {
   const mode = ((req.nextUrl.searchParams.get('mode') as JobMode) || 'zip') as JobMode;
   const dirs = await createJobDirs(mode);
   try {
-    const { fields, clipCount, bgmPath } = await streamMultipart(req, mode, dirs.clipsDir);
+    const { fields, clipCount, bgmPath, whooshPath, introPath, dingPaths, hookLogoPaths } =
+      await streamMultipart(req, mode, dirs.clipsDir);
     // mode ในฟอร์มมีสิทธิ์เหนือกว่า query (แต่การกรองไฟล์ทำตาม query ไปแล้ว)
     const finalMode = ((fields.mode as JobMode) || mode) as JobMode;
 
@@ -166,6 +200,11 @@ export async function POST(req: NextRequest) {
       bgm: bgmPath,
       removeVocals: fields.removeVocals === 'on',
       bgmVolume: parseFloat(fields.bgmVolume || '0.12') || 0.12,
+      whoosh: whooshPath,
+      intro: introPath,
+      ding: dingPaths,
+      hookLogos: hookLogoPaths,
+      hookTitle: (fields.hookTitle || '').trim(),
       llm: {
         provider: (fields.llmProvider || '').trim(),
         key: (fields.llmKey || '').trim(),

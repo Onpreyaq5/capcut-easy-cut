@@ -100,6 +100,8 @@ def build_caps(lines, no_space, karaoke):
             hl = [ranges[j] for j in range(i + 1)]   # คำที่พูดไปแล้ว (รวมคำปัจจุบัน) = เหลือง
             # min_dur=0: อย่ายืดคลิปคำสั้น ไม่งั้นทับคลิปคำถัดไป (คาราโอเกะพัง)
             caps.append((s, e, text, {"style": "word", "hl": hl, "min_dur": 0.0}))
+    # เรียงตามเวลาเสมอ (whisper/ผู้ใช้แก้แล้วเวลาอาจไม่เรียง) — build_draft จะ clamp กันทับให้อีกชั้น
+    caps.sort(key=lambda c: c[0])
     return caps
 
 

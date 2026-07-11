@@ -93,6 +93,8 @@ const nid = () => `l${Date.now().toString(36)}_${(_idc++).toString(36)}`;
 // จัดกลุ่ม words เป็นบรรทัดตามจำนวนคำต่อบรรทัด (0 = อัตโนมัติตามช่องว่างเวลา)
 export function groupWords(words: SubWord[], wordsPerLine: number): SubLine[] {
   if (!words.length) return [];
+  // เรียงตามเวลาก่อนเสมอ — whisper บางครั้งคืน timestamp ไม่เรียง ทำให้บรรทัดทับกัน/พรีวิวเพี้ยน
+  words = [...words].sort((a, b) => a.start - b.start);
   const lines: SubLine[] = [];
   if (wordsPerLine > 0) {
     for (let i = 0; i < words.length; i += wordsPerLine) {

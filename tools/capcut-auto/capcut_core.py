@@ -1115,6 +1115,23 @@ def detect_disfluencies(words, fillers=True, repeats=True, max_repeat_gap=0.9):
                     i = j
                     continue
             i += 1
+        # retake ระดับวลี: พูดวลี/ประโยคเดิมซ้ำติดกัน (แก้คำพูด 2-3 รอบ) -> ตัดรอบก่อนหน้า เก็บรอบสุดท้าย
+        # เดิมจับได้แค่คำเดียวซ้ำ ทำให้ "พูดแก้ทั้งประโยค 3 รอบ" หลุดขึ้นซับครบทุกรอบ
+        norm = [_norm_unit(t["word"]) for t in toks]
+        i = 0
+        while i < len(toks):
+            matched = False
+            for n in range(min(8, (len(toks) - i) // 2), 1, -1):
+                seq_a, seq_b = norm[i:i + n], norm[i + n:i + 2 * n]
+                if (seq_a == seq_b and all(seq_a)
+                        and sum(len(x) for x in seq_a) >= 4     # วลีสั้นเกิน (เช่น "ๆ ๆ") ไม่นับ กัน false positive
+                        and toks[i + n]["start"] - toks[i + n - 1]["end"] <= 1.2):
+                    hits.append({"start": toks[i]["start"], "end": toks[i + n]["start"], "reason": "retake"})
+                    i += n   # ขยับไปเทคถัดไป — ถ้าซ้ำอีก (พูด 3 รอบ) จะตัดรอบกลางต่อ เหลือรอบสุดท้าย
+                    matched = True
+                    break
+            if not matched:
+                i += 1
     return hits
 
 
@@ -1928,14 +1945,31 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand, sfx=None):
     pop = dict(brand.get("pop_anim") or {})
     pop["path"] = resolve_effect_cache(pop.get("resource_id", ""), pop.get("path", ""))
 
-    texts, segs, anims, ri = [], [], [], 14001
+    # ---- กันซับซ้อนกัน (สำคัญ): ยืดเวลาขั้นต่ำก่อน แล้ว clamp ไม่ให้ทับซับตัวถัดไป "ในสไตล์เดียวกัน" ----
+    # เดิมยืดทุกตัวเป็น >=0.4s โดยไม่เช็คตัวถัดไป -> พูดเร็ว (ห่าง <0.4s) = ข้อความ 2 ชุดทับกันบนจอ
+    # (สไตล์ต่างกัน เช่น word กับ hook อยู่คนละตำแหน่ง ตั้งใจให้ขึ้นพร้อมกันได้ จึง clamp เฉพาะสไตล์เดียวกัน)
+    eff_times = []
     for cap in captions:
-        ns, ne, raw = cap[0], cap[1], cap[2]
+        _ns, _ne = float(cap[0]), float(cap[1])
+        _meta = cap[3] if len(cap) >= 4 and isinstance(cap[3], dict) else {}
+        _md = float(_meta.get("min_dur", 0.4))
+        eff_times.append([_ns, max(_ne, _ns + _md), _meta.get("style", "normal")])
+    by_style = {}
+    for _i, (_ns, _ne, _st) in enumerate(eff_times):
+        by_style.setdefault(_st, []).append(_i)
+    for _st, _idxs in by_style.items():
+        _idxs.sort(key=lambda k: eff_times[k][0])
+        for _a, _b in zip(_idxs, _idxs[1:]):
+            if eff_times[_a][1] > eff_times[_b][0]:
+                # ตัดท้ายซับก่อนหน้าให้จบตรงที่ตัวถัดไปเริ่ม (เหลืออย่างน้อย 0.05s กัน duration ติดลบ)
+                eff_times[_a][1] = max(eff_times[_b][0], eff_times[_a][0] + 0.05)
+
+    texts, segs, anims, ri = [], [], [], 14001
+    for cap_i, cap in enumerate(captions):
+        ns, ne, raw = eff_times[cap_i][0], eff_times[cap_i][1], cap[2]
         cap_meta = cap[3] if len(cap) >= 4 and isinstance(cap[3], dict) else {}
         cap_style = cap_meta.get("style", "normal")
-        # ปกติบังคับ min 0.4s กันซับกระพริบ — แต่ karaoke แตกเป็นคลิปสั้นต่อคำ ต้องไม่ยืด (ไม่งั้นทับคลิปถัดไป)
-        min_dur = float(cap_meta.get("min_dur", 0.4))
-        start_us, dur_us = int(ns * 1_000_000), int(max(min_dur, ne - ns) * 1_000_000)
+        start_us, dur_us = int(ns * 1_000_000), int(max(0.05, ne - ns) * 1_000_000)
         hl = cap_meta.get("hl")
         # วลี highlight สั้นอยู่แล้ว — ไม่ตัดบรรทัด เพื่อรักษาตำแหน่งช่วงสีให้ตรง
         txt = raw if hl is not None else thai_wrap(raw, lc)

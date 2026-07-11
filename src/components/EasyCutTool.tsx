@@ -100,6 +100,10 @@ const STEPS = [
   { n: '4', t: 'เรนเดอร์ / CapCut', icon: FileText },
 ] as const;
 
+// ฟอนต์ไทยที่ bundle มา (เลือกได้จากเว็บ)
+const FONTS = ['Kanit', 'Prompt', 'Sarabun', 'ChakraPetch', 'Mitr', 'BaiJamjuree', 'Krub', 'Kodchasan'] as const;
+const SUB_COLORS = ['#FFFFFF', '#FFE400', '#33D17A', '#00C2FF', '#B983FF', '#FF7AC6', '#FF6B4A', '#FF3B3B'] as const;
+
 // แถวเลือกไฟล์ SFX
 function SfxRow({ label, file, onPick, onClear }: { label: string; file: File | null; onPick: () => void; onClear: () => void }) {
   return (
@@ -150,6 +154,13 @@ export function EasyCutTool() {
   const [hookLogos, setHookLogos] = useState<File[]>([]);
   const [hookTitle, setHookTitle] = useState('');
   const hookLogoRef = useRef<HTMLInputElement>(null);
+  // สไตล์ซับ (ฟอนต์/ขนาด/ตำแหน่ง/สี/ขอบ)
+  const [font, setFont] = useState('');
+  const [fontSize, setFontSize] = useState(12);
+  const [subY, setSubY] = useState(-0.46);
+  const [borderWidth, setBorderWidth] = useState(0.16);
+  const [textColor, setTextColor] = useState('#FFFFFF');
+  const [hlColor, setHlColor] = useState('#FFE400');
   const settings = useApp((s) => s.settings);
   const setSettings = useApp((s) => s.setSettings);
   const thaiCheckLlm = pickThaiCheckLlm(settings);
@@ -221,6 +232,13 @@ export function EasyCutTool() {
     // Hook (โลโก้ + ข้อความ)
     hookLogos.forEach((f) => fd.append('hookLogo', f));
     if (hookTitle.trim()) fd.append('hookTitle', hookTitle.trim());
+    // สไตล์ซับ
+    if (font) fd.append('font', font);
+    fd.append('fontSize', String(fontSize));
+    fd.append('subY', String(subY));
+    fd.append('borderWidth', String(borderWidth));
+    fd.append('textColor', textColor);
+    fd.append('hlColor', hlColor);
     // AI (ถ้ามี) ใช้ตรวจแก้ภาษาไทยในซับให้แม่นขึ้น — ไม่บังคับ
     if (thaiCheckLlm) {
       fd.append('llmProvider', thaiCheckLlm.provider);
@@ -613,6 +631,67 @@ export function EasyCutTool() {
                 placeholder="เช่น คนพูดรัวๆ มักพรีเซนต์ไม่ดี (เว้นว่าง = ไม่ใส่)"
               />
             </label>
+
+            {/* สไตล์ซับ (ฟอนต์ / ขนาด / ตำแหน่ง / สี / ขอบ) */}
+            <div className="mb-4 rounded-lg border border-border bg-surface-muted p-3">
+              <span className="mb-2 flex items-center gap-2 text-sm font-semibold text-text-secondary">
+                <FileText className="h-4 w-4 text-primary" />
+                สไตล์ซับ
+              </span>
+
+              <label className="mb-2 block">
+                <span className="mb-1 block text-xs font-semibold text-text-muted">ฟอนต์</span>
+                <Select value={font} onChange={(e) => setFont(e.target.value)}>
+                  <option value="">ค่าเริ่มต้น (Leelawadee)</option>
+                  {FONTS.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+
+              <label className="mb-2 block">
+                <span className="mb-1 flex justify-between text-xs font-semibold text-text-muted">
+                  <span>ขนาดตัวอักษร</span>
+                  <span>{fontSize}</span>
+                </span>
+                <input type="range" min={8} max={20} step={0.5} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="w-full accent-primary" />
+              </label>
+
+              <label className="mb-2 block">
+                <span className="mb-1 flex justify-between text-xs font-semibold text-text-muted">
+                  <span>ตำแหน่งแนวตั้ง</span>
+                  <span>{Math.round((1 - (subY + 1) / 2) * 100)}%</span>
+                </span>
+                <input type="range" min={-0.85} max={0.2} step={0.02} value={subY} onChange={(e) => setSubY(Number(e.target.value))} className="w-full accent-primary" />
+              </label>
+
+              <label className="mb-2 block">
+                <span className="mb-1 flex justify-between text-xs font-semibold text-text-muted">
+                  <span>ความหนาเส้นขอบ</span>
+                  <span>{borderWidth.toFixed(2)}</span>
+                </span>
+                <input type="range" min={0} max={0.3} step={0.01} value={borderWidth} onChange={(e) => setBorderWidth(Number(e.target.value))} className="w-full accent-primary" />
+              </label>
+
+              <div className="mb-1 mt-2 text-xs font-semibold text-text-muted">สีตัวอักษร</div>
+              <div className="flex flex-wrap gap-1.5">
+                {SUB_COLORS.map((c) => (
+                  <button key={c} type="button" onClick={() => setTextColor(c)} aria-label={c}
+                    className={cn('h-6 w-6 rounded-full border-2', textColor === c ? 'border-primary' : 'border-border')}
+                    style={{ backgroundColor: c }} />
+                ))}
+              </div>
+              <div className="mb-1 mt-2 text-xs font-semibold text-text-muted">สีคำเน้น (highlight)</div>
+              <div className="flex flex-wrap gap-1.5">
+                {SUB_COLORS.map((c) => (
+                  <button key={c} type="button" onClick={() => setHlColor(c)} aria-label={c}
+                    className={cn('h-6 w-6 rounded-full border-2', hlColor === c ? 'border-primary' : 'border-border')}
+                    style={{ backgroundColor: c }} />
+                ))}
+              </div>
+            </div>
 
             <div className="mb-4 rounded-lg border border-border bg-surface-muted p-3">
               <span className="mb-1 block text-sm font-semibold text-text-secondary">

@@ -64,6 +64,13 @@ def main():
     ap.add_argument("--intro", default="", help="SFX ตอนเปิดคลิป")
     ap.add_argument("--ding", default="", help="SFX เน้นคำสำคัญ (ใส่หลายไฟล์คั่นด้วย ',' เพื่อสลับเสียง)")
     ap.add_argument("--auto-sfx", action="store_true", help="ใช้ SFX ในตัว (วูช/เปิดคลิป/เน้นคำ) ที่ bundle มาให้ฟรี")
+    # ---- สไตล์ซับ (เลือกได้จากเว็บ) ----
+    ap.add_argument("--font", default="", help="ชื่อฟอนต์ (Kanit/Prompt/Sarabun/... ที่ bundle มา)")
+    ap.add_argument("--font-size", type=float, default=0, help="ขนาดตัวอักษรฐาน (0 = ตามค่าเริ่มต้น)")
+    ap.add_argument("--sub-y", type=float, default=999, help="ตำแหน่งซับแนวตั้ง -1..1 (999 = ค่าเริ่มต้น)")
+    ap.add_argument("--border-width", type=float, default=-1, help="ความหนาเส้นขอบ (-1 = ค่าเริ่มต้น)")
+    ap.add_argument("--text-color", default="", help="สีตัวอักษร hex เช่น #FFFFFF")
+    ap.add_argument("--hl-color", default="", help="สีคำเน้น (highlight) hex เช่น #FFE400")
     ap.add_argument("--hook-logo", default="", help="ภาพโลโก้ Hook (1-2 ไฟล์ คั่นด้วย ',') ฝังลงช่วงเปิดคลิป")
     ap.add_argument("--hook-title", default="", help="ข้อความใหญ่บน Hook (เช่น 'ตัดต่อ')")
     ap.add_argument("--hook-dur", type=float, default=5.0, help="ความยาว Hook (วินาที)")
@@ -79,6 +86,28 @@ def main():
     brand = cc.load_brand(a.brand or None)
     if a.words:
         brand["word_max_words"] = a.words
+
+    # ---- สไตล์ซับจากเว็บ (ฟอนต์/ขนาด/ตำแหน่ง/สี/ขอบ) ----
+    def _hex_rgb(h):
+        h = h.lstrip("#")
+        return [int(h[i:i+2], 16) / 255.0 for i in (0, 2, 4)] if len(h) == 6 else None
+    if a.font:
+        fp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts", a.font + ".ttf")
+        if os.path.exists(fp):
+            brand["font_path"] = fp
+            print(f"ฟอนต์: {a.font}", flush=True)
+        else:
+            print(f"   !! ไม่พบฟอนต์ {a.font} — ใช้ค่าเริ่มต้น", flush=True)
+    if a.font_size and a.font_size > 0:
+        brand["font_size"] = float(a.font_size)
+    if a.sub_y != 999:
+        brand["word_y_pos"] = float(a.sub_y)
+    if a.border_width >= 0:
+        brand["border_width"] = float(a.border_width)
+    if a.text_color and _hex_rgb(a.text_color):
+        brand["white"] = _hex_rgb(a.text_color)
+    if a.hl_color and _hex_rgb(a.hl_color):
+        brand["yellow"] = _hex_rgb(a.hl_color)
     folder = os.path.abspath(a.clips)
     clips = sorted([os.path.join(folder, f) for f in os.listdir(folder)
                     if os.path.splitext(f)[1].lower() in VIDEO_EXT

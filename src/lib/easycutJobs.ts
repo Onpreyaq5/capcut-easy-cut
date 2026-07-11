@@ -212,6 +212,13 @@ export interface StartOptions {
   ding?: string[]; // paths SFX เน้นคำ (สลับเสียง)
   hookLogos?: string[]; // paths ภาพโลโก้ Hook (1-2)
   hookTitle?: string; // ข้อความใหญ่บน Hook
+  // สไตล์ซับ (เลือกจากเว็บ)
+  font?: string;
+  fontSize?: number;
+  subY?: number;
+  borderWidth?: number;
+  textColor?: string;
+  hlColor?: string;
   llm?: { provider?: string; key?: string; model?: string; base?: string };
 }
 
@@ -251,6 +258,12 @@ export async function startJob(opts: StartOptions): Promise<string> {
     if (opts.ding && opts.ding.length) args.push('--ding', opts.ding.join(','));
     if (opts.hookLogos && opts.hookLogos.length) args.push('--hook-logo', opts.hookLogos.join(','));
     if (opts.hookTitle) args.push('--hook-title', opts.hookTitle);
+    if (opts.font) args.push('--font', opts.font);
+    if (opts.fontSize && opts.fontSize > 0) args.push('--font-size', String(opts.fontSize));
+    if (typeof opts.subY === 'number') args.push('--sub-y', String(opts.subY));
+    if (typeof opts.borderWidth === 'number' && opts.borderWidth >= 0) args.push('--border-width', String(opts.borderWidth));
+    if (opts.textColor) args.push('--text-color', opts.textColor);
+    if (opts.hlColor) args.push('--hl-color', opts.hlColor);
     const l = opts.llm;
     if (l?.provider) args.push('--llm-provider', l.provider);
     if (l?.key) args.push('--llm-key', l.key);

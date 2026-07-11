@@ -206,6 +206,12 @@ export async function POST(req: NextRequest) {
       ding: dingPaths,
       hookLogos: hookLogoPaths,
       hookTitle: (fields.hookTitle || '').trim(),
+      font: (fields.font || '').trim(),
+      fontSize: parseFloat(fields.fontSize || '0') || 0,
+      subY: fields.subY ? parseFloat(fields.subY) : undefined,
+      borderWidth: fields.borderWidth ? parseFloat(fields.borderWidth) : undefined,
+      textColor: (fields.textColor || '').trim(),
+      hlColor: (fields.hlColor || '').trim(),
       llm: {
         provider: (fields.llmProvider || '').trim(),
         key: (fields.llmKey || '').trim(),

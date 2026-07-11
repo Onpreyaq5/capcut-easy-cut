@@ -92,6 +92,14 @@ function filenameFromDisposition(header: string | null, fallback: string): strin
 
 const waveform = [34, 52, 28, 70, 44, 84, 36, 64, 48, 78, 32, 56, 40, 88, 46, 62, 30, 72];
 
+// 4 ขั้นตอน (โครงแบบ tamsub.com)
+const STEPS = [
+  { n: '1', t: 'อัปโหลดวิดีโอ', icon: UploadCloud },
+  { n: '2', t: 'AI ถอดเสียง', icon: AudioLines },
+  { n: '3', t: 'เลือกสไตล์', icon: Sparkles },
+  { n: '4', t: 'เรนเดอร์ / CapCut', icon: FileText },
+] as const;
+
 export function EasyCutTool() {
   const [files, setFiles] = useState<File[]>([]);
   const [projectName, setProjectName] = useState('CAPCUT_Easy_CUT');
@@ -272,34 +280,32 @@ export function EasyCutTool() {
 
   return (
     <div className="container-page py-8 lg:py-12">
-      <div className="mb-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-end">
-        <div>
-          <Badge tone="ai" className="mb-4">
-            <Sparkles className="h-3.5 w-3.5" />
-            AI audio cleanup
-          </Badge>
-          <h1 className="max-w-3xl font-heading text-[2.35rem] font-bold leading-[1.03] text-text-primary sm:text-6xl">
-            <span className="block sm:inline">CAPCUT Easy</span>
-            <span className="block sm:ml-3 sm:inline">CUT</span>
-          </h1>
-          <p className="mt-4 max-w-2xl text-lg text-text-secondary">
-            อัปคลิปดิบ แล้วส่งออกเป็นวิดีโอที่กระชับพร้อมซับ Smart Karaoke สำหรับ CapCut ในจังหวะเดียว
-          </p>
-        </div>
+      {/* Hero — โครงสร้างแบบ tamsub.com (ใช้สีของเราเอง) */}
+      <div className="mb-10 text-center">
+        <Badge tone="ai" className="mb-4">
+          <Sparkles className="h-3.5 w-3.5" />
+          AI ทำซับอัตโนมัติ
+        </Badge>
+        <h1 className="mx-auto max-w-3xl font-heading text-[2.3rem] font-bold leading-[1.06] text-text-primary sm:text-6xl">
+          ใส่ซับให้คลิปในไม่กี่วินาที
+        </h1>
+        <p className="mx-auto mt-4 max-w-2xl text-lg text-text-secondary">
+          อัปคลิปดิบ → ตัด Dead air + ถอดเสียงทำซับไทยอัตโนมัติ พร้อมส่งเข้า CapCut ในจังหวะเดียว
+        </p>
 
-        <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-surface p-2 shadow-md">
-          <div className="rounded-md bg-surface-muted px-3 py-3 text-center">
-            <Scissors className="mx-auto mb-1.5 h-4 w-4 text-primary" />
-            <p className="text-xs font-semibold text-text-secondary">Dead air</p>
-          </div>
-          <div className="rounded-md bg-surface-muted px-3 py-3 text-center">
-            <AudioLines className="mx-auto mb-1.5 h-4 w-4 text-accent" />
-            <p className="text-xs font-semibold text-text-secondary">Whisper</p>
-          </div>
-          <div className="rounded-md bg-surface-muted px-3 py-3 text-center">
-            <FileText className="mx-auto mb-1.5 h-4 w-4 text-ai" />
-            <p className="text-xs font-semibold text-text-secondary">SRT</p>
-          </div>
+        {/* 4 ขั้นตอน (แบบ tamsub) */}
+        <div className="mx-auto mt-7 grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-4">
+          {STEPS.map((s) => (
+            <div key={s.n} className="flex items-center gap-2.5 rounded-lg border border-border bg-surface p-3 shadow-sm">
+              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary text-xs font-bold text-on-primary">
+                {s.n}
+              </span>
+              <span className="flex items-center gap-1.5 text-left text-sm font-semibold text-text-secondary">
+                <s.icon className="h-4 w-4 shrink-0 text-primary" />
+                {s.t}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -601,6 +607,40 @@ export function EasyCutTool() {
           </div>
         </aside>
       </div>
+
+      {/* Footer — โครงแบบ tamsub.com */}
+      <footer className="mt-16 border-t border-border pt-8 text-center text-sm text-text-muted">
+        <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+          <a href="/guide" className="transition-colors hover:text-primary">
+            FAQ / วิธีใช้
+          </a>
+          <a
+            href="https://github.com/Onpreyaq5/capcut-easy-cut/issues/new?labels=enhancement"
+            target="_blank"
+            rel="noreferrer"
+            className="transition-colors hover:text-primary"
+          >
+            แนะนำฟีเจอร์
+          </a>
+          <a
+            href="https://github.com/Onpreyaq5/capcut-easy-cut/issues/new?labels=bug"
+            target="_blank"
+            rel="noreferrer"
+            className="transition-colors hover:text-primary"
+          >
+            แจ้งบัค
+          </a>
+          <a
+            href="https://github.com/Onpreyaq5/capcut-easy-cut"
+            target="_blank"
+            rel="noreferrer"
+            className="transition-colors hover:text-primary"
+          >
+            ติดต่อทีมงาน
+          </a>
+        </div>
+        <p className="mt-4 text-xs">CAPCUT Easy CUT — ประมวลผลบนเครื่องคุณ 100% ไม่อัปโหลดวิดีโอขึ้นเซิร์ฟเวอร์</p>
+      </footer>
     </div>
   );
 }

@@ -1317,8 +1317,447 @@ def _assert_draft_media_ok(folder):
         raise SystemExit("ตรวจ draft ไม่ผ่าน: media reference จะทำให้ CapCut ขึ้นสีแดง\n" + msg)
 
 
-def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
-    """สร้าง CapCut draft (video track 1 segment + text captions + pop + zoom)"""
+# ============================================================
+#  ใส่เสียง / ซาวด์เอฟเฟกต์ลง CapCut draft (audio track)
+#  เพลงประกอบ + วูชตรงรอยต่อ + SFX เปิดคลิป + เสียงเน้นคำสำคัญ
+#  โครงสร้างอ้างอิงจากโปรเจกต์ CapCut จริง: audio material + companion 5 ตัว + audio track
+# ============================================================
+def _audio_companions(dc):
+    """สร้าง companion materials 5 ตัวที่ audio segment ต้องอ้างอิง (speed/beats/sound_channel/vocal/placeholder)
+    เพิ่มเข้า dc['materials'] แล้วคืน list ของ id ไว้ใส่ extra_material_refs"""
+    m = dc["materials"]
+    sp = {"id": guid(), "type": "speed", "mode": 0, "speed": 1.0, "curve_speed": None}
+    bt = {"id": guid(), "type": "beats", "enable_ai_beats": False, "gear": 404, "gear_count": 0,
+          "mode": 404, "user_beats": [], "user_delete_ai_beats": None,
+          "ai_beats": {"melody_url": "", "melody_path": "", "beats_url": "", "beats_path": "",
+                       "beats_path_new": "", "melody_percents": [], "beat_speed_infos": []}}
+    scm = {"id": guid(), "type": "none", "audio_channel_mapping": 0, "is_config_open": False}
+    vs = {"id": guid(), "type": "vocal_separation", "choice": 0, "removed_sounds": [],
+          "time_range": None, "production_path": "", "final_algorithm": "", "enter_from": ""}
+    ph = {"id": guid(), "type": "placeholder_info", "meta_type": "none", "res_path": "",
+          "res_text": "", "error_path": "", "error_text": ""}
+    m.setdefault("speeds", []).append(sp)
+    m.setdefault("beats", []).append(bt)
+    m.setdefault("sound_channel_mappings", []).append(scm)
+    m.setdefault("vocal_separations", []).append(vs)
+    m.setdefault("placeholder_infos", []).append(ph)
+    # ลำดับตามที่ CapCut ใช้จริง: speed, placeholder, beats, sound_channel_mapping, vocal_separation
+    return [sp["id"], ph["id"], bt["id"], scm["id"], vs["id"]]
+
+
+def _audio_material(path, dur_us, name, kind="sound"):
+    """สร้าง audio material (kind: 'sound'=SFX, 'music'=เพลงประกอบ)"""
+    return {"id": guid(), "type": kind, "path": path.replace("\\", "/"), "name": name,
+            "duration": int(dur_us), "unique_id": "", "wave_points": [], "music_id": "",
+            "app_id": 0, "category_id": "", "category_name": "local", "check_flag": 1,
+            "effect_id": "", "resource_id": "", "source_platform": 0, "local_material_id": "",
+            "copyright_limit_type": "none", "music_source": "undefine", "intensifies_path": "",
+            "formula_id": "", "request_id": "", "team_id": "", "video_id": "", "text_id": ""}
+
+
+def _audio_segment(mat_id, refs, start_us, dur_us, src_start_us, src_dur_us, volume, render_index):
+    """สร้าง audio track segment ชี้ material + companion refs"""
+    return {"id": guid(),
+            "material_id": mat_id, "extra_material_refs": list(refs),
+            "source_timerange": {"start": int(src_start_us), "duration": int(src_dur_us)},
+            "target_timerange": {"start": int(start_us), "duration": int(dur_us)},
+            "render_timerange": {"start": 0, "duration": 0},
+            "speed": 1.0, "volume": float(volume), "last_nonzero_volume": float(volume),
+            "desc": "", "state": 0, "is_loop": False, "is_tone_modify": False, "reverse": False,
+            "intensifies_audio": False, "cartoon": False, "clip": None, "uniform_scale": None,
+            "render_index": int(render_index), "track_render_index": 1, "keyframe_refs": [],
+            "visible": True, "group_id": "", "common_keyframes": [], "caption_info": None,
+            "source": "segmentsourcenormal", "is_placeholder": False, "template_id": "",
+            "template_scene": "default", "hdr_settings": None, "raw_segment_id": "",
+            "responsive_layout": {"enable": False, "target_follow": "", "size_layout": 0,
+                                  "horizontal_pos_layout": 0, "vertical_pos_layout": 0}}
+
+
+def _audio_track(segments, render_index):
+    return {"id": guid(), "type": "audio", "flag": 0, "attribute": 0, "name": "",
+            "is_default_name": True, "segments": segments}
+
+
+def separate_vocals(src, out_path, method="auto"):
+    """เอเจนต์ตัดเสียงร้องออก เหลือแต่ดนตรี — ทำ BGM จากเพลงที่มีเนื้อร้อง (เช่นโหลดจาก YouTube)
+    method:
+      'auto'   = ใช้ demucs (AI คุณภาพสูง) ถ้าติดตั้งไว้ ไม่งั้น fallback ffmpeg karaoke
+      'demucs' = บังคับใช้ demucs (ต้อง pip install demucs — คุณภาพดีสุด)
+      'ffmpeg' = ตัดเสียงกลาง (เร็ว ไม่ต้องลงอะไร แต่หยาบกว่า)
+    คืนชื่อวิธีที่ใช้จริง ('demucs'/'ffmpeg')"""
+    method = (method or "auto").lower()
+    if method in ("auto", "demucs"):
+        try:
+            import demucs.separate  # noqa: F401
+            import tempfile, shutil as _sh
+            tmp = tempfile.mkdtemp(prefix="demucs_")
+            # --two-stems vocals -> ได้ vocals + no_vocals (ดนตรีล้วน)
+            # --mp3 = เซฟผ่าน lameenc เลี่ยง torchaudio/torchcodec ที่มีปัญหาบน Windows
+            r = run([sys.executable, "-m", "demucs", "-n", "htdemucs",
+                     "--two-stems", "vocals", "--mp3", "--mp3-bitrate", "256",
+                     "-o", tmp, src])
+            base = os.path.splitext(os.path.basename(src))[0]
+            nov = os.path.join(tmp, "htdemucs", base, "no_vocals.mp3")
+            if os.path.exists(nov):
+                run([FFMPEG, "-y", "-i", nov, "-c:a", "aac", "-b:a", "192k", out_path])
+                _sh.rmtree(tmp, ignore_errors=True)
+                if os.path.exists(out_path):
+                    return "demucs"
+            _sh.rmtree(tmp, ignore_errors=True)
+            if method == "demucs":
+                raise SystemExit("demucs รันไม่สำเร็จ: " + (r.stderr or "")[-400:])
+        except ImportError:
+            if method == "demucs":
+                raise SystemExit("ยังไม่ได้ติดตั้ง demucs — ติดตั้งด้วย: pip install demucs")
+    # ---- fallback: ตัดเสียงกลาง (vocals มัก pan กลาง) ด้วย ffmpeg ----
+    # หลักการ: L-R หักล้างเสียงที่อยู่กลาง (เสียงร้อง) เหลือเครื่องดนตรีที่ pan ซ้าย/ขวา
+    run([FFMPEG, "-y", "-i", src, "-af",
+         "pan=stereo|c0=0.5*c0-0.5*c1|c1=0.5*c1-0.5*c0",
+         "-c:a", "aac", "-b:a", "192k", out_path])
+    if not os.path.exists(out_path):
+        raise SystemExit(f"แยกเสียงร้องไม่สำเร็จ: {src}")
+    return "ffmpeg"
+
+
+def add_sfx(dc, out_dir, total_dur_us, scene_kf, captions, sfx):
+    """ใส่เสียงลง draft: sfx = dict อาจมีคีย์ bgm/whoosh/intro/ding (แต่ละอันมี path[, volume])
+      - bgm   : เพลงประกอบ วางต่อกันจนเต็มคลิป เสียงเบา
+      - whoosh: SFX ตรงรอยต่อฉาก (จาก scene_kf ซึ่งเป็นเวลา µs)
+      - intro : SFX ตอนเปิดคลิป (t=0)
+      - ding  : เสียงเน้นตอนซับคำสำคัญ (caption ที่ meta มี hl)
+    คัดลอกไฟล์เสียงเข้าโฟลเดอร์โปรเจกต์ (self-contained) — กัน Media Not Found เหมือนวิดีโอ"""
+    if not sfx:
+        return 0
+    media_dir = os.path.join(out_dir, "local_media")
+    os.makedirs(media_dir, exist_ok=True)
+    ri = [300]
+    dur_cache = {}
+
+    def prep(path):
+        """คัดลอกไฟล์เข้าโปรเจกต์ + คืน (path_ในโปรเจกต์, duration_us)"""
+        if path in dur_cache:
+            return dur_cache[path]
+        dst = os.path.join(media_dir, os.path.basename(path))
+        if os.path.abspath(path) != os.path.abspath(dst):
+            shutil.copy2(path, dst)
+        _clear_readonly(dst)
+        du = int(ffprobe_dur(dst) * 1_000_000)
+        dur_cache[path] = (dst, du)
+        return dur_cache[path]
+
+    def one_shot(path, at_us, volume, kind="sound", max_dur_us=None):
+        dst, fdur = prep(path)
+        if fdur <= 0:
+            return None
+        dur = min(fdur, max(0, total_dur_us - at_us))
+        if max_dur_us:                       # จำกัดความยาว (กัน SFX หางยาวซ้อนกัน เช่น ding 2 วิ)
+            dur = min(dur, int(max_dur_us))
+        if dur <= 0:
+            return None
+        mat = _audio_material(dst, fdur, os.path.basename(dst), kind)
+        dc["materials"]["audios"].append(mat)
+        ri[0] += 1
+        return _audio_segment(mat["id"], _audio_companions(dc), at_us, dur, 0, dur, volume, ri[0])
+
+    tracks_added = 0
+
+    # ----- เพลงประกอบ (ต่อกันจนเต็มคลิป) -----
+    bgm = sfx.get("bgm")
+    if bgm and bgm.get("path"):
+        bgm_src = bgm["path"]
+        # ตัดเสียงร้องออกก่อน (ถ้าเปิด) — เหลือแต่ดนตรีทำ BGM
+        if bgm.get("remove_vocals"):
+            inst = os.path.join(media_dir, "bgm_instrumental.m4a")
+            used = separate_vocals(bgm_src, inst, method=bgm.get("vocal_method", "auto"))
+            print(f"      ตัดเสียงร้องออกจากเพลง BGM (วิธี: {used})", flush=True)
+            bgm_src = inst
+        dst, fdur = prep(bgm_src)
+        vol = float(bgm.get("volume", 0.15))
+        segs, pos = [], 0
+        while pos < total_dur_us and fdur > 0:
+            dur = min(fdur, total_dur_us - pos)
+            mat = _audio_material(dst, fdur, os.path.basename(dst), "music")
+            dc["materials"]["audios"].append(mat)
+            ri[0] += 1
+            segs.append(_audio_segment(mat["id"], _audio_companions(dc), pos, dur, 0, dur, vol, ri[0]))
+            pos += dur
+        if segs:
+            dc["tracks"].append(_audio_track(segs, 0)); tracks_added += 1
+
+    # ----- SFX วูชตรงรอยต่อ + intro (แทร็กเดียว จุดไม่ทับกัน) -----
+    sfx_segs = []
+    intro = sfx.get("intro")
+    if intro and intro.get("path"):
+        s = one_shot(intro["path"], 0, float(intro.get("volume", 0.9)))
+        if s: sfx_segs.append(s)
+    whoosh = sfx.get("whoosh")
+    if whoosh and whoosh.get("path") and scene_kf:
+        for t in scene_kf:
+            s = one_shot(whoosh["path"], int(t), float(whoosh.get("volume", 0.8)))
+            if s: sfx_segs.append(s)
+    if sfx_segs:
+        dc["tracks"].append(_audio_track(sfx_segs, 0)); tracks_added += 1
+
+    # ----- เสียงเน้นคำสำคัญ (ding) แทร็กแยก (กันทับกับวูช) -----
+    ding = sfx.get("ding")
+    if ding and captions:
+        # รองรับหลายเสียง (สลับวนไปเรื่อยๆ กันน่าเบื่อ) ผ่าน 'paths' หรือเสียงเดียวผ่าน 'path'
+        paths = list(ding.get("paths") or ([] if not ding.get("path") else [ding["path"]]))
+        if paths:
+            min_gap = float(ding.get("min_gap", 3.5))            # ห่างขึ้น = ไม่ถี่/รก
+            cap_us = int(float(ding.get("max_dur", 0.5)) * 1e6)  # ตัดหางเสียงไม่ให้ยาวซ้อนกัน
+            ding_segs, last, idx = [], -99.0, 0
+            for cap in captions:
+                meta = cap[3] if len(cap) >= 4 and isinstance(cap[3], dict) else {}
+                if meta.get("hl"):                   # เฉพาะแคปชันที่มีคำไฮไลท์ (คำสำคัญ)
+                    if cap[0] - last < min_gap:
+                        continue
+                    last = cap[0]
+                    pth = paths[idx % len(paths)]    # สลับเสียงวน
+                    idx += 1
+                    s = one_shot(pth, int(cap[0] * 1e6),
+                                 float(ding.get("volume", 0.45)), max_dur_us=cap_us)
+                    if s: ding_segs.append(s)
+        if ding_segs:
+            dc["tracks"].append(_audio_track(ding_segs, 0)); tracks_added += 1
+
+    return tracks_added
+
+
+# ---------- Hook แบบครีเอเตอร์: โลโก้ในกล่องขาว overlay มุมบน + ซูม (บนคลิปคนพูดจริง) ----------
+def make_logo_box(logo_path, out_path, box=460, pad=70, radius=90):
+    """ประกอบโลโก้ใส่กล่องขาวมุมมน (แบบในคลิปครีเอเตอร์) ด้วย PIL -> PNG โปร่งใสมุมกล่อง"""
+    from PIL import Image, ImageDraw
+    W = box
+    canvas = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    d = ImageDraw.Draw(canvas)
+    d.rounded_rectangle([0, 0, W - 1, W - 1], radius=radius, fill=(255, 255, 255, 255))
+    logo = Image.open(logo_path).convert("RGBA")
+    # ถ้าโลโก้พื้นขาวทึบ (ไม่โปร่ง) ให้ครอปพื้นขาวออกโดยประมาณ = วางเต็มกล่องพอดี
+    inner = W - pad * 2
+    lw, lh = logo.size
+    s = min(inner / lw, inner / lh)
+    logo = logo.resize((max(1, int(lw * s)), max(1, int(lh * s))), Image.LANCZOS)
+    ox, oy = (W - logo.width) // 2, (W - logo.height) // 2
+    canvas.paste(logo, (ox, oy), logo)
+    canvas.save(out_path)
+    return out_path
+
+
+def make_text_image(text, out_path, font_path=None, size=200, stroke=16,
+                    fill=(255, 255, 255, 255), stroke_fill=(0, 0, 0, 255), pad=40):
+    """เรนเดอร์ข้อความใหญ่ ขาว ขอบดำหนา (แบบ hook ครีเอเตอร์) เป็น PNG โปร่งใส"""
+    from PIL import Image, ImageDraw, ImageFont
+    fp = font_path or "C:/Windows/Fonts/LeelaUIb.ttf"
+    try:
+        font = ImageFont.truetype(fp, size)
+    except Exception:
+        font = ImageFont.truetype("C:/Windows/Fonts/tahomabd.ttf", size)
+    tmp = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+    box = tmp.textbbox((0, 0), text, font=font, stroke_width=stroke)
+    w, h = box[2] - box[0] + pad * 2, box[3] - box[1] + pad * 2
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.text((pad - box[0], pad - box[1]), text, font=font, fill=fill,
+           stroke_width=stroke, stroke_fill=stroke_fill)
+    img.save(out_path)
+    return out_path
+
+
+def _photo_material_from(base_video_mat, path, wh, dur_us=10800000000):
+    """สร้าง photo material โดยยืมโครงจาก video material เดิม (กันฟิลด์ขาด) แล้วสลับเป็นรูป"""
+    m = copy.deepcopy(base_video_mat)
+    w, h = wh
+    m.update({"id": guid(), "type": "photo", "path": path.replace("\\", "/"),
+              "material_name": os.path.basename(path), "width": w, "height": h,
+              "duration": int(dur_us), "has_audio": False, "category_name": "local",
+              "local_material_id": str(uuid.uuid4()),
+              "crop": {"upper_left_x": 0.0, "upper_left_y": 0.0, "upper_right_x": 1.0, "upper_right_y": 0.0,
+                       "lower_left_x": 0.0, "lower_left_y": 1.0, "lower_right_x": 1.0, "lower_right_y": 1.0},
+              "crop_scale": 1.0, "crop_ratio": "free"})
+    return m
+
+
+def _pop_scale_keyframes(dur_us, hold_out=False):
+    """คีย์เฟรมเด้งเข้า — ค่าเป็น 'ตัวคูณ' ของ clip.scale (CapCut คูณกับ scale ฐาน)
+    เล็ก 0.15 -> พุ่งเกิน 1.18 -> เด้งกลับ 1.0 (bounce) ; hold_out=หุบออกท้าย"""
+    pop = min(200000, int(dur_us * 0.22))
+    pts = [(0, 0.2), (pop, 1.10), (int(pop * 1.6), 0.97), (int(pop * 2.1), 1.0)]
+    if hold_out:
+        pts += [(max(int(pop * 2.1) + 1, dur_us - 140000), 1.0), (dur_us, 0.2)]
+    else:
+        pts += [(dur_us, 1.0)]
+
+    def kf(t, v):
+        return {"id": guid(), "curveType": "Line", "graphID": "",
+                "left_control": {"x": 0.0, "y": 0.0}, "right_control": {"x": 0.0, "y": 0.0},
+                "time_offset": int(max(0, min(dur_us, t))), "values": [float(v)]}
+    kx = {"id": guid(), "keyframe_list": [kf(t, v) for t, v in pts], "material_id": "", "property_type": "KFTypeScaleX"}
+    ky = {"id": guid(), "keyframe_list": [kf(t, v) for t, v in pts], "material_id": "", "property_type": "KFTypeScaleY"}
+    return [kx, ky]
+
+
+def add_hook_overlays(dc, out_dir, overlays, dur_us):
+    """วาง overlay รูป (โลโก้ในกล่องขาว) มุมบนช่วงเปิดคลิป — แบบครีเอเตอร์ (ไม่ใช่การ์ดนิ่ง)
+    overlays: list[{path, x, y, scale}] (x,y = -1..1, y+ = บน) ; แต่ละอันขึ้นแทร็ก overlay ของตัวเอง เด้งเข้า-ออก"""
+    media_dir = os.path.join(out_dir, "local_media")
+    os.makedirs(media_dir, exist_ok=True)
+    base_seg = copy.deepcopy(next(t for t in dc["tracks"] if t["type"] == "video")["segments"][0])
+    base_vid = dc["materials"]["videos"][0]
+    base_refs = base_seg.get("extra_material_refs", [])
+
+    def clone_companions():
+        id2b = {}
+        for bucket, items in dc["materials"].items():
+            if isinstance(items, list):
+                for it in items:
+                    if isinstance(it, dict) and it.get("id") in base_refs:
+                        id2b[it["id"]] = bucket
+        refs = []
+        for rid in base_refs:
+            b = id2b.get(rid)
+            if not b:
+                continue
+            src = next(x for x in dc["materials"][b] if x.get("id") == rid)
+            c = copy.deepcopy(src); c["id"] = guid()
+            dc["materials"][b].append(c); refs.append(c["id"])
+        return refs
+
+    n = 0
+    for ov in overlays:
+        dst = os.path.join(media_dir, os.path.basename(ov["path"]))
+        if os.path.abspath(ov["path"]) != os.path.abspath(dst):
+            shutil.copy2(ov["path"], dst)
+        _clear_readonly(dst)
+        w, h = ffprobe_wh(dst) if dst.lower().endswith((".mp4", ".mov")) else (ov.get("w", 460), ov.get("h", 460))
+        mat = _photo_material_from(base_vid, dst, (w, h))
+        dc["materials"]["videos"].append(mat)
+        seg = copy.deepcopy(base_seg)
+        sc = float(ov.get("scale", 0.3))
+        seg.update({"id": guid(), "material_id": mat["id"], "extra_material_refs": clone_companions(),
+                    "source_timerange": {"start": 0, "duration": int(dur_us)},
+                    "target_timerange": {"start": 0, "duration": int(dur_us)},
+                    "render_index": 15000 + n, "uniform_scale": {"on": True, "value": 1.0},
+                    "common_keyframes": _pop_scale_keyframes(dur_us) if ov.get("pop") else []})
+        seg["clip"] = {"scale": {"x": sc, "y": sc}, "rotation": 0.0,
+                       "transform": {"x": float(ov.get("x", 0.0)), "y": float(ov.get("y", 0.5))},
+                       "flip": {"vertical": False, "horizontal": False}, "alpha": 1.0}
+        dc["tracks"].append({"id": guid(), "type": "video", "flag": 0, "attribute": 0,
+                             "name": "", "is_default_name": True, "segments": [seg]})
+        n += 1
+    return n
+
+
+# ---------- Hook เปิดคลิป (คลิป/ภาพ intro + ซูมเข้า-ออก + SFX) ----------
+def _hook_zoom_keyframes(dur_us, peak=1.20):
+    """คีย์เฟรมซูมเข้า-ออกสำหรับภาพ Hook: เริ่ม 1.0 -> ซูมเข้า peak กลางคลิป -> ออก 1.0 (ตามจังหวะ SFX)"""
+    pts = [(0, 1.0), (int(dur_us * 0.45), peak), (int(dur_us * 0.8), 1.06), (dur_us, 1.0)]
+    def kf(t, v):
+        return {"id": guid(), "curveType": "Line", "graphID": "",
+                "left_control": {"x": 0.0, "y": 0.0}, "right_control": {"x": 0.0, "y": 0.0},
+                "time_offset": int(max(0, min(dur_us, t))), "values": [float(v)]}
+    kx = {"id": guid(), "keyframe_list": [kf(t, v) for t, v in pts], "material_id": "", "property_type": "KFTypeScaleX"}
+    ky = {"id": guid(), "keyframe_list": [kf(t, v) for t, v in pts], "material_id": "", "property_type": "KFTypeScaleY"}
+    return [kx, ky]
+
+
+def _prepare_hook_clip(hook_src, media_dir, dur_us, canvas_wh):
+    """ทำไฟล์ hook เป็นวิดีโอสั้น พอดี canvas (รูป -> วิดีโอนิ่ง dur วินาที; วิดีโอ -> ตัด dur วินาทีแรก)"""
+    w, h = canvas_wh
+    w -= w % 2; h -= h % 2
+    dsec = dur_us / 1_000_000
+    dst = os.path.join(media_dir, "hook.mp4")
+    vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+          f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30")
+    ext = os.path.splitext(hook_src)[1].lower()
+    if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+        run([FFMPEG, "-y", "-loop", "1", "-i", hook_src, "-t", f"{dsec:.3f}",
+             "-vf", vf, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+             "-preset", ENCODE_PRESET, "-crf", ENCODE_CRF, dst])
+    else:
+        run([FFMPEG, "-y", "-i", hook_src, "-t", f"{dsec:.3f}", "-vf", vf, "-an",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p",
+             "-preset", ENCODE_PRESET, "-crf", ENCODE_CRF, dst])
+    if not os.path.exists(dst):
+        raise SystemExit(f"ทำไฟล์ hook ไม่สำเร็จ: {hook_src}")
+    return dst
+
+
+def prepend_hook(dc, out_dir, hook_src, hook_dur_us, canvas_wh, open_sfx=None):
+    """แทรกคลิป Hook เปิดหน้าสุด: เลื่อนทุก segment ไปข้างหลัง hook_dur, ใส่คลิป hook ที่ [0,hook_dur]
+    พร้อมซูมเข้า-ออก + SFX เปิด (open_sfx = {path[,volume]}) — ทำหลัง build_draft (มี dc พร้อมแล้ว)"""
+    media_dir = os.path.join(out_dir, "local_media")
+    os.makedirs(media_dir, exist_ok=True)
+    hook_clip = _prepare_hook_clip(hook_src, media_dir, hook_dur_us, canvas_wh)
+    ensure_local_file(hook_clip)
+
+    vtr = next(t for t in dc["tracks"] if t["type"] == "video")
+    base_seg = copy.deepcopy(vtr["segments"][0])   # เก็บโครงเดิมก่อนเลื่อน
+    base_vid = copy.deepcopy(dc["materials"]["videos"][0])
+
+    # 1) เลื่อนทุก segment ที่มีอยู่ไปข้างหลัง hook_dur
+    for t in dc["tracks"]:
+        for s in t.get("segments", []):
+            s["target_timerange"]["start"] = int(s["target_timerange"]["start"]) + hook_dur_us
+
+    # 2) clone companion materials ของ video segment (กันใช้ id ซ้ำกับ segment เดิม)
+    base_refs = base_seg.get("extra_material_refs", [])
+    id2mat = {}
+    for bucket, items in dc["materials"].items():
+        if isinstance(items, list):
+            for it in items:
+                if isinstance(it, dict) and it.get("id") in base_refs:
+                    id2mat[it["id"]] = bucket
+    new_refs = []
+    for rid in base_refs:
+        bucket = id2mat.get(rid)
+        if not bucket:
+            continue
+        src = next(x for x in dc["materials"][bucket] if x.get("id") == rid)
+        c = copy.deepcopy(src); c["id"] = guid()
+        dc["materials"][bucket].append(c); new_refs.append(c["id"])
+
+    # 3) hook video material (clone โครง video เดิม แล้วสลับ path/id/ขนาด/ความยาว)
+    hv = base_vid
+    hv["id"] = guid(); hv["local_material_id"] = str(uuid.uuid4())
+    hv["path"] = hook_clip.replace("\\", "/"); hv["material_name"] = os.path.basename(hook_clip)
+    hv["duration"] = int(hook_dur_us); hv["width"], hv["height"] = canvas_wh
+    hv["has_audio"] = False
+    dc["materials"]["videos"].append(hv)
+
+    # 4) hook segment (clone โครง segment เดิม + ซูมเข้า-ออก) แทรกหน้าสุด
+    hs = base_seg
+    hs["id"] = guid(); hs["material_id"] = hv["id"]; hs["extra_material_refs"] = new_refs
+    hs["source_timerange"] = {"start": 0, "duration": int(hook_dur_us)}
+    hs["target_timerange"] = {"start": 0, "duration": int(hook_dur_us)}
+    hs["common_keyframes"] = _hook_zoom_keyframes(hook_dur_us)
+    hs["uniform_scale"] = {"on": False, "value": 1.0}
+    hs["speed"] = 1.0
+    vtr["segments"].insert(0, hs)
+
+    # 5) SFX เปิดคลิป (บนแทร็กเสียงใหม่ ที่เวลา 0)
+    if open_sfx and open_sfx.get("path"):
+        dst = os.path.join(media_dir, os.path.basename(open_sfx["path"]))
+        if os.path.abspath(open_sfx["path"]) != os.path.abspath(dst):
+            shutil.copy2(open_sfx["path"], dst)
+        _clear_readonly(dst)
+        fdur = int(ffprobe_dur(dst) * 1_000_000)
+        if fdur > 0:
+            mat = _audio_material(dst, fdur, os.path.basename(dst), "sound")
+            dc["materials"]["audios"].append(mat)
+            seg = _audio_segment(mat["id"], _audio_companions(dc), 0,
+                                 min(fdur, hook_dur_us + 500000), 0, min(fdur, hook_dur_us + 500000),
+                                 float(open_sfx.get("volume", 0.9)), 500)
+            dc["tracks"].append(_audio_track([seg], 0))
+
+    # 6) ยืดความยาวรวม
+    dc["duration"] = int(dc.get("duration", 0)) + hook_dur_us
+    return hook_clip
+
+
+def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand, sfx=None):
+    """สร้าง CapCut draft (video track 1 segment + text captions + pop + zoom [+ audio/SFX])
+    sfx: dict อาจมีคีย์ bgm/whoosh/intro/ding (ดู add_sfx) — ใส่เพลง+ซาวด์เอฟเฟกต์"""
     ensure_capcut()
     ensure_local_file(clip)   # กันคลิปสีแดง: ต้องไม่ใช่ไฟล์ cloud-only placeholder ก่อนให้ CapCut อ้างอิง
     clip_w, clip_h = ffprobe_wh(clip)
@@ -1411,8 +1850,8 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
             text_size = int(round(fs * 1.45))
             line_width = 0.54
         elif cap_style == "word":
-            style_size = fs * 1.15
-            text_size = int(round(fs * 2.1))
+            style_size = fs * brand.get("word_size_mul", 1.9)      # ใหญ่แบบครีเอเตอร์
+            text_size = int(round(fs * brand.get("word_textsize_mul", 3.6)))
             line_width = 0.92
         elif cap_style == "hook":
             style_size = fs * 1.5
@@ -1432,6 +1871,7 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
             so["range"] = [a, b]; styles.append(so)
         mat["content"] = json.dumps({"text": txt, "styles": styles}, ensure_ascii=False)
         mat["font_path"] = fp; mat["text_color"] = "#FFFFFF"; mat["border_color"] = "#000000"
+        mat["border_width"] = brand.get("border_width", 0.16)   # ขอบดำหนา (แบบครีเอเตอร์)
         mat["font_size"] = style_size; mat["text_size"] = text_size; mat["line_max_width"] = line_width
         texts.append(mat)
 
@@ -1475,6 +1915,16 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand):
     dc["materials"]["texts"] = texts
     dc["materials"]["material_animations"] = anims
     ttr["segments"] = segs
+
+    # ---- ใส่เสียง/ซาวด์เอฟเฟกต์ (เพลงประกอบ + วูชรอยต่อ + intro + เน้นคำสำคัญ) ----
+    if sfx:
+        try:
+            n = add_sfx(dc, out_dir, clip_dur_us, scene_kf, captions, sfx)
+            if n:
+                print(f"      ใส่เสียง {n} แทร็ก (เพลง/ซาวด์เอฟเฟกต์)", flush=True)
+        except Exception as e:
+            print(f"      !! ใส่เสียงไม่สำเร็จ (ข้าม): {str(e)[:160]}", flush=True)
+
     _sync_timeline_drafts(out_dir, dc)
 
     meta = json.load(open(os.path.join(out_dir, "draft_meta_info.json"), encoding="utf-8"))

@@ -42,10 +42,65 @@ _FONT_FALLBACKS = [
 ]
 
 
+def _font_family_name(ttf_path):
+    """อ่านชื่อ family จริงจากไฟล์ฟอนต์ (ใช้ PIL) — เผื่อชื่อไฟล์ต่างจากชื่อ family"""
+    try:
+        from PIL import ImageFont
+        fam, _style = ImageFont.truetype(ttf_path, 40).getname()
+        return fam
+    except Exception:
+        return None
+
+
+_INSTALLED_FONTS = set()   # กันติดตั้งซ้ำในรันเดียว
+
+
+def install_font_user(ttf_path):
+    """ติดตั้งฟอนต์แบบ per-user (ไม่ต้องสิทธิ์แอดมิน) เพื่อให้ CapCut มองเห็นและ render ได้จริง
+    — สำคัญ: CapCut จะ render ฟอนต์ที่ 'ติดตั้งในเครื่อง' เท่านั้น ลำพัง font_path ในไฟล์ draft ไม่พอ
+    คืน path ที่ติดตั้งแล้ว (ในโฟลเดอร์ฟอนต์ของ user) หรือ None ถ้าล้มเหลว"""
+    if os.name != "nt" or not ttf_path or not os.path.exists(ttf_path):
+        return None
+    if ttf_path in _INSTALLED_FONTS:
+        return None
+    try:
+        import shutil, ctypes, winreg
+        fonts_dir = os.path.join(LOCALAPPDATA, "Microsoft", "Windows", "Fonts")
+        os.makedirs(fonts_dir, exist_ok=True)
+        base = os.path.basename(ttf_path)
+        dest = os.path.join(fonts_dir, base)
+        if not os.path.exists(dest):
+            shutil.copy2(ttf_path, dest)
+        fam = _font_family_name(ttf_path) or os.path.splitext(base)[0]
+        # ลงทะเบียนใน HKCU (per-user ไม่ต้องแอดมิน)
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
+                              r"Software\Microsoft\Windows NT\CurrentVersion\Fonts") as key:
+            winreg.SetValueEx(key, f"{fam} (TrueType)", 0, winreg.REG_SZ, dest)
+        # โหลดฟอนต์เข้า session ปัจจุบัน + แจ้งระบบว่าฟอนต์เปลี่ยน (CapCut ที่เปิดใหม่จะเห็น)
+        try:
+            ctypes.windll.gdi32.AddFontResourceW(dest)
+            ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001D, 0, 0, 0, 1000, None)  # WM_FONTCHANGE
+        except Exception:
+            pass
+        _INSTALLED_FONTS.add(ttf_path)
+        print(f"   ติดตั้งฟอนต์ '{fam}' ให้ CapCut แล้ว", flush=True)
+        return dest.replace("\\", "/")
+    except Exception as e:
+        print(f"   (ติดตั้งฟอนต์ไม่สำเร็จ ใช้ path ตรง ๆ แทน: {e})", flush=True)
+        return None
+
+
 def resolve_font(brand):
-    """คืน font_path ที่มีจริงในเครื่อง — ถ้าที่ตั้งไว้ไม่มี ลอง fallback ทีละตัว"""
+    """คืน font_path ที่มีจริงในเครื่อง — ถ้าที่ตั้งไว้ไม่มี ลอง fallback ทีละตัว
+    ถ้าเป็นฟอนต์ที่ bundle มา (assets/fonts) จะติดตั้งเข้าเครื่องอัตโนมัติเพื่อให้ CapCut render ได้"""
     want = (brand or {}).get("font_path") or ""
     if want and os.path.exists(want):
+        # ฟอนต์ bundle → ติดตั้งเข้าเครื่องก่อน แล้วชี้ font_path ไปตัวที่ติดตั้ง (เสถียร + CapCut เห็น)
+        norm = os.path.normpath(want).replace("\\", "/")
+        if "/assets/fonts/" in norm.lower():
+            installed = install_font_user(want)
+            if installed:
+                return installed
         return want.replace("\\", "/")
     for f in _FONT_FALLBACKS:
         if os.path.exists(f):

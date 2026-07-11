@@ -203,6 +203,9 @@ export interface StartOptions {
   script?: string; // capcut
   words?: number; // จำนวนคำต่อ 1 ซับ (0/undefined = อัตโนมัติ)
   cutFlubs?: boolean; // ตัดคำพูดติดขัด/พูดผิด (เอ่อ อ่า, พูดซ้ำ, retake/blooper)
+  bgm?: string; // path ไฟล์เพลงประกอบ (capcut)
+  removeVocals?: boolean; // ตัดเสียงร้องออกจากเพลง BGM
+  bgmVolume?: number; // ระดับเสียงเพลง 0-1
   llm?: { provider?: string; key?: string; model?: string; base?: string };
 }
 
@@ -231,6 +234,11 @@ export async function startJob(opts: StartOptions): Promise<string> {
     if (opts.hook) args.push('--hook', opts.hook);
     if (words) args.push('--words', words);
     if (opts.cutFlubs) args.push('--cut-flubs');
+    if (opts.bgm) {
+      args.push('--bgm', opts.bgm);
+      if (opts.removeVocals) args.push('--remove-vocals');
+      if (opts.bgmVolume && opts.bgmVolume > 0) args.push('--bgm-volume', String(opts.bgmVolume));
+    }
     const l = opts.llm;
     if (l?.provider) args.push('--llm-provider', l.provider);
     if (l?.key) args.push('--llm-key', l.key);

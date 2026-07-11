@@ -109,6 +109,10 @@ export function EasyCutTool() {
   const [wordsPerCap, setWordsPerCap] = useState(0);
   // ตัดคำพูดติดขัด/พูดผิด (เอ่อ อ่า, พูดซ้ำ, retake/blooper)
   const [cutFlubs, setCutFlubs] = useState(false);
+  // เพลงประกอบ (BGM) + ตัดเสียงร้อง
+  const [bgmFile, setBgmFile] = useState<File | null>(null);
+  const [removeVocals, setRemoveVocals] = useState(true);
+  const bgmRef = useRef<HTMLInputElement>(null);
   const settings = useApp((s) => s.settings);
   const setSettings = useApp((s) => s.setSettings);
   const thaiCheckLlm = pickThaiCheckLlm(settings);
@@ -166,6 +170,12 @@ export function EasyCutTool() {
     fd.append('hook', hookText.trim());
     fd.append('words', String(wordsPerCap > 0 ? wordsPerCap : 0));
     fd.append('cutFlubs', cutFlubs ? 'on' : 'off');
+    // เพลงประกอบ (เฉพาะโหมดสร้าง CapCut)
+    if (bgmFile) {
+      fd.append('bgm', bgmFile);
+      fd.append('removeVocals', removeVocals ? 'on' : 'off');
+      fd.append('bgmVolume', '0.12');
+    }
     // AI (ถ้ามี) ใช้ตรวจแก้ภาษาไทยในซับให้แม่นขึ้น — ไม่บังคับ
     if (thaiCheckLlm) {
       fd.append('llmProvider', thaiCheckLlm.provider);
@@ -452,6 +462,54 @@ export function EasyCutTool() {
                 className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
               />
             </label>
+
+            {/* เพลงประกอบ (BGM) + ตัดเสียงร้อง */}
+            <div className="mb-4 rounded-lg border border-border bg-surface-muted p-3">
+              <span className="mb-1 flex items-center gap-2 text-sm font-semibold text-text-secondary">
+                <AudioLines className="h-4 w-4 text-primary" />
+                เพลงประกอบ (ไม่บังคับ)
+              </span>
+              <p className="mb-2 text-xs leading-relaxed text-text-muted">
+                อัปโหลดเพลงคลอทั้งคลิป — เปิด &ldquo;ตัดเสียงร้อง&rdquo; เพื่อเหลือแต่ดนตรี (AI demucs)
+              </p>
+              <input
+                ref={bgmRef}
+                type="file"
+                accept="audio/*,.mp3,.wav,.m4a,.aac"
+                hidden
+                onChange={(e) => setBgmFile(e.target.files?.[0] ?? null)}
+              />
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={() => bgmRef.current?.click()}>
+                  <UploadCloud className="h-4 w-4" />
+                  {bgmFile ? 'เปลี่ยนเพลง' : 'เลือกเพลง'}
+                </Button>
+                {bgmFile && (
+                  <span className="flex min-w-0 flex-1 items-center gap-1 text-xs text-text-secondary">
+                    <span className="truncate">{bgmFile.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setBgmFile(null)}
+                      className="shrink-0 text-text-muted hover:text-danger"
+                      aria-label="ลบเพลง"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                )}
+              </div>
+              {bgmFile && (
+                <label className="mt-2 flex items-center gap-2 text-sm text-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={removeVocals}
+                    onChange={(e) => setRemoveVocals(e.target.checked)}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  ตัดเสียงร้องออก เหลือแต่ดนตรี (AI)
+                </label>
+              )}
+            </div>
 
             <label className="mb-4 block">
               <span className="mb-1.5 block text-sm font-semibold text-text-secondary">ข้อความ Hook (เขียวตัวใหญ่ช่วงเปิดคลิป)</span>

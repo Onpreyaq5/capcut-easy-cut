@@ -57,6 +57,9 @@ def main():
     ap.add_argument("--words", type=int, default=0, help="จำนวนคำต่อ 1 ซับ (0 = อัตโนมัติ)")
     ap.add_argument("--cut-flubs", action="store_true",
                     help="ตัดคำพูดติดขัด/พูดผิดออก (เอ่อ อ่า, พูดซ้ำ, retake/blooper); มี --llm-* จะใช้ AI ตัด retake ด้วย")
+    ap.add_argument("--bgm", default="", help="ไฟล์เพลงประกอบ (จะคลอทั้งคลิป)")
+    ap.add_argument("--remove-vocals", action="store_true", help="ตัดเสียงร้องออกจากเพลง BGM (เหลือแต่ดนตรี)")
+    ap.add_argument("--bgm-volume", type=float, default=0.12, help="ระดับเสียงเพลงประกอบ 0-1")
     ap.add_argument("--llm-provider", default="", help="ตรวจแก้ภาษาไทยในซับ: groq/cerebras/openrouter/gemini/openai/anthropic/local")
     ap.add_argument("--llm-key", default="")
     ap.add_argument("--llm-model", default="")
@@ -173,9 +176,17 @@ def main():
         hd = min(brand.get("hook_dur", 5.5), total_dur)
         all_caps.insert(0, (0.0, hd, cc.correct_thai(hook_text, brand["corrections"]), {"style": "hook"}))
 
+    # ---- เพลงประกอบ (ไม่บังคับ) — ตัดเสียงร้องได้ ----
+    sfx = None
+    if a.bgm and os.path.exists(a.bgm):
+        sfx = {"bgm": {"path": a.bgm, "volume": max(0.0, min(1.0, a.bgm_volume)),
+                       "remove_vocals": bool(a.remove_vocals)}}
+        print(f"เพลงประกอบ: {os.path.basename(a.bgm)}"
+              f"{' (ตัดเสียงร้อง)' if a.remove_vocals else ''}", flush=True)
+
     print("เขียนโปรเจกต์ CapCut...", flush=True)
     out_dir, tpl, (w, h) = cc.build_draft(combined, a.name, all_caps,
-                                          int(total_dur * 1_000_000), scene_kf, brand)
+                                          int(total_dur * 1_000_000), scene_kf, brand, sfx=sfx)
 
     print("\n===== เสร็จแล้ว =====")
     print("template   :", tpl)

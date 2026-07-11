@@ -36,6 +36,7 @@ function extOf(name: string): string {
 interface Parsed {
   fields: Record<string, string>;
   clipCount: number;
+  bgmPath?: string; // ไฟล์เพลงประกอบที่อัปโหลด (ถ้ามี)
 }
 
 // สตรีม multipart ลงดิสก์ตรง ๆ ด้วย busboy (ไม่โหลดไฟล์ทั้งก้อนเข้า RAM เหมือน req.formData())
@@ -50,6 +51,7 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
     const fields: Record<string, string> = {};
     const writes: Promise<void>[] = [];
     let clipCount = 0;
+    let bgmPath: string | undefined;
     let failed: Error | null = null;
 
     bb.on('field', (name, val) => {
@@ -57,6 +59,22 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
     });
 
     bb.on('file', (name, stream, info) => {
+      // เพลงประกอบ (BGM) — 1 ไฟล์
+      if (name === 'bgm') {
+        const ext = extOf(info.filename || '') || '.mp3';
+        const dest = path.join(clipsDir, `_bgm${ext}`);
+        bgmPath = dest;
+        const ws = createWriteStream(dest);
+        writes.push(
+          new Promise<void>((res, rej) => {
+            ws.on('finish', () => res());
+            ws.on('error', rej);
+            stream.on('error', rej);
+          }),
+        );
+        stream.pipe(ws);
+        return;
+      }
       if (name !== 'clips') {
         stream.resume(); // ทิ้ง field ไฟล์ที่ไม่เกี่ยว
         return;
@@ -90,7 +108,7 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
         return;
       }
       Promise.all(writes)
-        .then(() => resolve({ fields, clipCount }))
+        .then(() => resolve({ fields, clipCount, bgmPath }))
         .catch(reject);
     });
 
@@ -107,7 +125,7 @@ export async function POST(req: NextRequest) {
   const mode = ((req.nextUrl.searchParams.get('mode') as JobMode) || 'zip') as JobMode;
   const dirs = await createJobDirs(mode);
   try {
-    const { fields, clipCount } = await streamMultipart(req, mode, dirs.clipsDir);
+    const { fields, clipCount, bgmPath } = await streamMultipart(req, mode, dirs.clipsDir);
     // mode ในฟอร์มมีสิทธิ์เหนือกว่า query (แต่การกรองไฟล์ทำตาม query ไปแล้ว)
     const finalMode = ((fields.mode as JobMode) || mode) as JobMode;
 
@@ -145,6 +163,9 @@ export async function POST(req: NextRequest) {
       script: fields.script || '',
       words: parseInt(fields.words || '0', 10) || 0,
       cutFlubs: fields.cutFlubs === 'on',
+      bgm: bgmPath,
+      removeVocals: fields.removeVocals === 'on',
+      bgmVolume: parseFloat(fields.bgmVolume || '0.12') || 0.12,
       llm: {
         provider: (fields.llmProvider || '').trim(),
         key: (fields.llmKey || '').trim(),

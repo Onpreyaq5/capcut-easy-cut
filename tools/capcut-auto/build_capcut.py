@@ -63,6 +63,7 @@ def main():
     ap.add_argument("--whoosh", default="", help="SFX ตรงรอยต่อคลิป (วูช)")
     ap.add_argument("--intro", default="", help="SFX ตอนเปิดคลิป")
     ap.add_argument("--ding", default="", help="SFX เน้นคำสำคัญ (ใส่หลายไฟล์คั่นด้วย ',' เพื่อสลับเสียง)")
+    ap.add_argument("--auto-sfx", action="store_true", help="ใช้ SFX ในตัว (วูช/เปิดคลิป/เน้นคำ) ที่ bundle มาให้ฟรี")
     ap.add_argument("--hook-logo", default="", help="ภาพโลโก้ Hook (1-2 ไฟล์ คั่นด้วย ',') ฝังลงช่วงเปิดคลิป")
     ap.add_argument("--hook-title", default="", help="ข้อความใหญ่บน Hook (เช่น 'ตัดต่อ')")
     ap.add_argument("--hook-dur", type=float, default=5.0, help="ความยาว Hook (วินาที)")
@@ -181,6 +182,20 @@ def main():
     if hook_text:
         hd = min(brand.get("hook_dur", 5.5), total_dur)
         all_caps.insert(0, (0.0, hd, cc.correct_thai(hook_text, brand["corrections"]), {"style": "hook"}))
+
+    # ---- SFX ในตัว (bundle มาให้ฟรี) — ใช้เมื่อเปิด --auto-sfx และไม่ได้อัปโหลดเอง ----
+    if a.auto_sfx:
+        _sfxdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "sfx")
+        def _b(fn):
+            p = os.path.join(_sfxdir, fn)
+            return p if os.path.exists(p) else ""
+        if not a.whoosh:
+            a.whoosh = _b("woosh.mp3")
+        if not a.intro:
+            a.intro = _b("metallic_riser.mp3")
+        if not a.ding:
+            a.ding = ",".join(p for p in (_b("pick.mp3"), _b("mouseclick.mp3"),
+                                          _b("camera_shutter.mp3"), _b("ding.mp3")) if p)
 
     # ---- เพลง/SFX ประกอบ (ไม่บังคับ) ----
     sfx = {}

@@ -206,6 +206,7 @@ export interface StartOptions {
   bgm?: string; // path ไฟล์เพลงประกอบ (capcut)
   removeVocals?: boolean; // ตัดเสียงร้องออกจากเพลง BGM
   bgmVolume?: number; // ระดับเสียงเพลง 0-1
+  autoSfx?: boolean; // ใช้ SFX ในตัวที่ bundle มา (ฟรี)
   whoosh?: string; // path SFX วูช (รอยต่อคลิป)
   intro?: string; // path SFX เปิดคลิป
   ding?: string[]; // paths SFX เน้นคำ (สลับเสียง)
@@ -244,6 +245,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
       if (opts.removeVocals) args.push('--remove-vocals');
       if (opts.bgmVolume && opts.bgmVolume > 0) args.push('--bgm-volume', String(opts.bgmVolume));
     }
+    if (opts.autoSfx) args.push('--auto-sfx');
     if (opts.whoosh) args.push('--whoosh', opts.whoosh);
     if (opts.intro) args.push('--intro', opts.intro);
     if (opts.ding && opts.ding.length) args.push('--ding', opts.ding.join(','));

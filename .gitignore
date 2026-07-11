@@ -34,3 +34,6 @@ __pycache__/
 
 # local dev tooling
 /.claude/
+
+# SFX จากคลัง CapCut (ลิขสิทธิ์ — ไม่แจกบน GitHub แต่รวมใน zip)
+tools/capcut-auto/assets/sfx/

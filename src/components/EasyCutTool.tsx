@@ -139,6 +139,7 @@ export function EasyCutTool() {
   const [removeVocals, setRemoveVocals] = useState(true);
   const bgmRef = useRef<HTMLInputElement>(null);
   // SFX (วูช / เปิดคลิป / เน้นคำ)
+  const [autoSfx, setAutoSfx] = useState(false);
   const [whooshFile, setWhooshFile] = useState<File | null>(null);
   const [introFile, setIntroFile] = useState<File | null>(null);
   const [dingFiles, setDingFiles] = useState<File[]>([]);
@@ -213,6 +214,7 @@ export function EasyCutTool() {
       fd.append('bgmVolume', '0.12');
     }
     // SFX
+    if (autoSfx) fd.append('autoSfx', 'on');
     if (whooshFile) fd.append('whoosh', whooshFile);
     if (introFile) fd.append('intro', introFile);
     dingFiles.forEach((f) => fd.append('ding', f));
@@ -560,8 +562,14 @@ export function EasyCutTool() {
                 <Sparkles className="h-4 w-4 text-primary" />
                 ซาวด์เอฟเฟกต์ (ไม่บังคับ)
               </span>
+              <label className="mb-2 flex items-center gap-2 rounded-md border border-primary/30 bg-primary-soft/50 px-2.5 py-2 text-sm font-semibold text-text-secondary">
+                <input type="checkbox" checked={autoSfx} onChange={(e) => setAutoSfx(e.target.checked)} className="h-4 w-4 accent-primary" />
+                ✨ ใส่ SFX ในตัวอัตโนมัติ (ฟรี — วูช/เปิดคลิป/เน้นคำ)
+              </label>
               <p className="mb-2 text-xs leading-relaxed text-text-muted">
-                อัปโหลดเสียงเอง — วูช (ตรงรอยต่อคลิป) · เปิดคลิป · เน้นคำ (ใส่หลายไฟล์สลับเสียงได้)
+                {autoSfx
+                  ? 'ใช้เสียงในตัวให้เลย — หรืออัปโหลดทับเฉพาะช่องที่อยากเปลี่ยน'
+                  : 'อัปโหลดเสียงเอง — วูช (ตรงรอยต่อคลิป) · เปิดคลิป · เน้นคำ (ใส่หลายไฟล์สลับเสียงได้)'}
               </p>
               <div className="space-y-2">
                 <SfxRow label="💨 วูช (รอยต่อ)" file={whooshFile} onPick={() => whooshRef.current?.click()} onClear={() => setWhooshFile(null)} />

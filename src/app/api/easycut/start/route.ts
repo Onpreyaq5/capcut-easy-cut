@@ -200,6 +200,7 @@ export async function POST(req: NextRequest) {
       bgm: bgmPath,
       removeVocals: fields.removeVocals === 'on',
       bgmVolume: parseFloat(fields.bgmVolume || '0.12') || 0.12,
+      autoSfx: fields.autoSfx === 'on',
       whoosh: whooshPath,
       intro: introPath,
       ding: dingPaths,

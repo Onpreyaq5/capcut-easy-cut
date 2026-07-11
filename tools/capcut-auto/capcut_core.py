@@ -1933,7 +1933,9 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand, sfx=None):
         ns, ne, raw = cap[0], cap[1], cap[2]
         cap_meta = cap[3] if len(cap) >= 4 and isinstance(cap[3], dict) else {}
         cap_style = cap_meta.get("style", "normal")
-        start_us, dur_us = int(ns * 1_000_000), int(max(0.4, ne - ns) * 1_000_000)
+        # ปกติบังคับ min 0.4s กันซับกระพริบ — แต่ karaoke แตกเป็นคลิปสั้นต่อคำ ต้องไม่ยืด (ไม่งั้นทับคลิปถัดไป)
+        min_dur = float(cap_meta.get("min_dur", 0.4))
+        start_us, dur_us = int(ns * 1_000_000), int(max(min_dur, ne - ns) * 1_000_000)
         hl = cap_meta.get("hl")
         # วลี highlight สั้นอยู่แล้ว — ไม่ตัดบรรทัด เพื่อรักษาตำแหน่งช่วงสีให้ตรง
         txt = raw if hl is not None else thai_wrap(raw, lc)

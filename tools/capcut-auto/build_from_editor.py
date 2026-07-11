@@ -52,21 +52,54 @@ def apply_style(brand, style):
     return brand
 
 
-def build_caps(lines, no_space):
-    """แต่ละบรรทัด -> 1 caption tuple (start, end, text, {'style':'word'})"""
+# เทมเพลตที่ไล่สีทีละคำ (ตรงกับ subtitleTypes.ts)
+_KARAOKE_TEMPLATES = {"focusColor", "karaoke", "focusScale", "neon", "wave"}
+
+
+def _line_text_and_ranges(words, join):
+    """คืน (text, [ (a,b) ต่อคำ ]) — ช่วงตัวอักษรของแต่ละคำในข้อความที่ต่อกันแล้ว"""
+    parts, ranges, pos = [], [], 0
+    sep = len(join)
+    for i, w in enumerate(words):
+        if i > 0:
+            pos += sep
+        t = (w.get("text") or "").strip()
+        ranges.append((pos, pos + len(t)))
+        parts.append(t)
+        pos += len(t)
+    return join.join(parts), ranges
+
+
+def build_caps(lines, no_space, karaoke):
+    """สร้าง caption tuples (start, end, text, {'style':'word','hl':[...]})
+    - karaoke=False: 1 บรรทัด = 1 caption (ทั้งบรรทัดสีเดียว, hl=[])
+    - karaoke=True: แตกแต่ละบรรทัดเป็นหลาย caption ไล่ไฮไลต์เพิ่มทีละคำตามเวลา"""
     caps = []
     join = "" if no_space else " "
     for ln in lines:
-        words = ln.get("words") or []
-        words = [w for w in words if (w.get("text") or "").strip()]
+        words = [w for w in (ln.get("words") or []) if (w.get("text") or "").strip()]
         if not words:
             continue
-        start = float(words[0]["start"])
-        end = float(words[-1]["end"])
-        if end <= start:
-            end = start + 0.4
-        text = join.join((w.get("text") or "").strip() for w in words)
-        caps.append((start, end, text, {"style": "word"}))
+        text, ranges = _line_text_and_ranges(words, join)
+        l_start = float(words[0]["start"])
+        l_end = float(words[-1]["end"])
+        if l_end <= l_start:
+            l_end = l_start + 0.4
+
+        if not karaoke:
+            caps.append((l_start, l_end, text, {"style": "word", "hl": []}))
+            continue
+
+        # karaoke: slice ที่ i ครอบเวลา [word_i.start, word_{i+1}.start) ไฮไลต์คำ 0..i
+        n = len(words)
+        for i in range(n):
+            s = float(words[i]["start"])
+            e = float(words[i + 1]["start"]) if i + 1 < n else l_end
+            if e <= s:
+                e = s + 0.12
+            hl = [ranges[j] for j in range(i + 1)]   # คำที่พูดไปแล้ว (รวมคำปัจจุบัน) = เหลือง
+            # min_dur=0: อย่ายืดคลิปคำสั้น ไม่งั้นทับคลิปคำถัดไป (คาราโอเกะพัง)
+            caps.append((s, e, text, {"style": "word", "hl": hl, "min_dur": 0.0}))
     return caps
 
 
@@ -87,7 +120,10 @@ def main():
     brand = cc.load_brand()
     brand = apply_style(brand, style)
 
-    caps = build_caps(lines, bool(style.get("noSpace")))
+    template = (style.get("template") or "karaoke").strip()
+    karaoke = template in _KARAOKE_TEMPLATES
+    caps = build_caps(lines, bool(style.get("noSpace")), karaoke)
+    print(f"เทมเพลต: {template} ({'ไล่สีทีละคำ' if karaoke else 'สีเดียวทั้งบรรทัด'})", flush=True)
     if not caps:
         print("__RESULT__" + json.dumps({"ok": False, "error": "ไม่มีซับให้สร้าง"}, ensure_ascii=False), flush=True)
         return

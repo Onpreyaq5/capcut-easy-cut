@@ -133,7 +133,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (!me) {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-md flex-col justify-center px-4 py-10">
-        <div className="rounded-2xl border border-border bg-surface p-6 shadow-sm">
+        <div className="animate-in rounded-2xl border border-border bg-surface p-6 shadow-sm">
           <div className="mb-1 flex items-center gap-2 text-primary">
             <Sparkles className="h-5 w-5" />
             <span className="text-xs font-bold tracking-wide">CAPCUT EASY CUT</span>

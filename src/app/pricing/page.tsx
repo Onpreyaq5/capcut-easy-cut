@@ -72,7 +72,7 @@ export default function PricingPage() {
           return (
             <div
               key={p.id}
-              className={`relative flex flex-col rounded-2xl border bg-surface p-6 shadow-sm ${
+              className={`hover-glow animate-in relative flex flex-col rounded-2xl border bg-surface p-6 shadow-sm ${
                 p.highlight ? 'border-primary shadow-md' : 'border-border'
               }`}
             >

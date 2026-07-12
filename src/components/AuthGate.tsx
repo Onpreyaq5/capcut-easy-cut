@@ -2,7 +2,7 @@
 // ประตูสมาชิก: สมัคร -> ยืนยันอีเมลด้วยรหัส OTP -> ถึงจะใช้ฟังก์ชันได้
 // เก็บเฉพาะอีเมล "จริง" ที่ยืนยันแล้ว ไว้ทำโปรโมชั่น (กันอีเมลปลอม)
 import { useCallback, useEffect, useState } from 'react';
-import { LogIn, LogOut, Loader2, Mail, Lock, Sparkles, UserPlus, ShieldCheck, ArrowLeft } from 'lucide-react';
+import { LogIn, LogOut, Loader2, Mail, Lock, Sparkles, UserPlus, ShieldCheck, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { fmtMinutes } from '@/lib/planInfo';
 
 type Mode = 'login' | 'signup' | 'verify';
@@ -20,6 +20,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [mode, setMode] = useState<Mode>('signup');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [consent, setConsent] = useState(true);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -157,7 +158,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                   value={code}
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
                   placeholder="______"
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-center text-2xl font-bold tracking-[0.5em] text-text-primary focus:border-primary focus:outline-none"
+                  aria-label="รหัสยืนยัน 6 หลัก"
+                  autoComplete="one-time-code"
+                  className="w-full rounded-xl border-2 border-slate-300 bg-white px-3 py-3 text-center text-2xl font-bold tracking-[0.4em] text-slate-950 caret-blue-600 shadow-inner placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-white"
                 />
                 {error && <p className="text-xs font-semibold text-red-500">{error}</p>}
                 <button type="submit" disabled={busy || code.length !== 6} className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
@@ -187,11 +190,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
               <form onSubmit={submit} className="space-y-3">
                 <label className="block">
                   <span className="mb-1 flex items-center gap-1 text-xs font-semibold text-text-muted"><Mail className="h-3.5 w-3.5" /> อีเมล</span>
-                  <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text-primary focus:border-primary focus:outline-none" />
+                  <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="w-full rounded-xl border-2 border-slate-300 bg-white px-3 py-3 text-base text-slate-950 caret-blue-600 shadow-inner placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-white" />
                 </label>
                 <label className="block">
                   <span className="mb-1 flex items-center gap-1 text-xs font-semibold text-text-muted"><Lock className="h-3.5 w-3.5" /> รหัสผ่าน {mode === 'signup' ? '(อย่างน้อย 6 ตัว)' : ''}</span>
-                  <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text-primary focus:border-primary focus:outline-none" />
+                  <div className="relative">
+                    <input type={showPassword ? 'text' : 'password'} required minLength={6} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="อย่างน้อย 6 ตัวอักษร" className="w-full rounded-xl border-2 border-slate-300 bg-white px-3 py-3 pr-12 text-base text-slate-950 caret-blue-600 shadow-inner placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-white" />
+                    <button type="button" onClick={() => setShowPassword((shown) => !shown)} aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'} aria-pressed={showPassword} className="absolute inset-y-0 right-0 flex min-h-11 min-w-11 items-center justify-center rounded-r-xl text-slate-600 hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white">
+                      {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  </div>
                 </label>
                 {mode === 'signup' && (
                   <label className="flex cursor-pointer items-start gap-2 text-xs text-text-secondary">

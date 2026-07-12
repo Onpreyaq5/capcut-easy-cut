@@ -1,6 +1,7 @@
 'use client';
 // หลังบ้าน (เฉพาะเจ้าของเว็บ): ดูจำนวนคนลองใช้ + รายชื่ออีเมลลูกค้า + โหลด CSV ไว้ส่งโปรโมชั่น
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Users, LogIn, MailCheck, Download, Loader2, ArrowLeft } from 'lucide-react';
 
 interface Row {
@@ -70,9 +71,9 @@ export default function AdminPage() {
     return (
       <div className="mx-auto max-w-2xl px-4 py-16 text-center">
         <p className="text-sm font-semibold text-red-500">{error}</p>
-        <a href="/" className="mt-3 inline-flex items-center gap-1 text-xs text-primary hover:underline">
+        <Link href="/" className="mt-3 inline-flex items-center gap-1 text-xs text-primary hover:underline">
           <ArrowLeft className="h-3 w-3" /> กลับหน้าหลัก
-        </a>
+        </Link>
       </div>
     );
   }

@@ -18,7 +18,14 @@ export async function POST(req: NextRequest) {
     if (user && !user.verified) {
       const otp = await issueOtp(mail);
       if ('error' in otp) return NextResponse.json({ ok: false, error: otp.error }, { status: 429 });
-      await sendOtpEmail(mail, otp.code);
+      const sent = await sendOtpEmail(mail, otp.code);
+      if (!sent.sent) {
+        console.error(`[OTP] ส่งรหัสใหม่ไม่สำเร็จ -> ${mail}: ${sent.error || 'mail provider is not configured'}`);
+        return NextResponse.json(
+          { ok: false, error: 'ยังส่งรหัสยืนยันไม่ได้ กรุณาลองใหม่อีกครั้งภายหลัง' },
+          { status: 503 },
+        );
+      }
     }
     return NextResponse.json({ ok: true, mailConfigured: mailConfigured() });
   } catch (e) {

@@ -35,6 +35,7 @@ async function sendViaResend(to: string, code: string): Promise<{ sent: boolean;
           <p style="color:#666;font-size:13px">รหัสนี้ใช้ได้ภายใน 10 นาที · หากคุณไม่ได้สมัคร กรุณาละเว้นอีเมลนี้</p>
         </div>`,
       }),
+      signal: AbortSignal.timeout(12_000),
     });
     if (!r.ok) {
       const t = await r.text().catch(() => '');
@@ -48,7 +49,11 @@ async function sendViaResend(to: string, code: string): Promise<{ sent: boolean;
 
 export async function sendOtpEmail(to: string, code: string): Promise<{ sent: boolean; error?: string }> {
   // ลำดับ: Resend (ง่ายสุด) -> SMTP -> ไม่มีทั้งคู่ = log ในคอนโซลเซิร์ฟเวอร์ (ไม่ส่งไป client เด็ดขาด)
-  if (resendConfigured()) return sendViaResend(to, code);
+  if (resendConfigured()) {
+    const result = await sendViaResend(to, code);
+    if (result.sent || !smtpConfigured()) return result;
+    console.error(`[OTP] Resend ไม่สำเร็จ กำลังลอง SMTP สำรอง: ${result.error || 'unknown error'}`);
+  }
   if (!smtpConfigured()) {
     console.log(`\n[OTP] ยังไม่ได้ตั้งระบบอีเมล — รหัสยืนยันสำหรับ ${to} คือ: ${code}\n(ตั้ง RESEND_API_KEY หรือ EASYCUT_SMTP_* เพื่อส่งอีเมลจริง — หรือให้แอดมินกดยืนยันในหลังบ้าน)\n`);
     return { sent: false };
@@ -64,6 +69,9 @@ export async function sendOtpEmail(to: string, code: string): Promise<{ sent: bo
       port,
       secure: port === 465, // 465 = SSL, 587 = STARTTLS
       auth: { user: smtpUser, pass: smtpPass },
+      connectionTimeout: 12_000,
+      greetingTimeout: 8_000,
+      socketTimeout: 15_000,
     });
     const from = (process.env.EASYCUT_MAIL_FROM || process.env.EASYCUT_SMTP_USER || '').trim();
     await transporter.sendMail({

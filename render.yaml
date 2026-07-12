@@ -21,6 +21,10 @@ services:
         sync: false
       - key: EASYCUT_PROMPTPAY_NAME  # ชื่อบัญชีพร้อมเพย์
         sync: false
+      - key: RESEND_API_KEY          # ส่งอีเมล OTP ผ่าน HTTPS API (แนะนำบน Render)
+        sync: false
+      - key: EASYCUT_MAIL_FROM       # เช่น CAPCUT Easy CUT <verify@yourdomain.com>
+        sync: false
       - key: EASYCUT_SMTP_HOST       # ส่งอีเมล OTP (ไม่บังคับ)
         sync: false
       - key: EASYCUT_SMTP_USER

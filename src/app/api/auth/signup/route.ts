@@ -22,15 +22,21 @@ export async function POST(req: NextRequest) {
     if ('error' in otp) return NextResponse.json({ ok: false, error: otp.error }, { status: 429 });
     const res = await sendOtpEmail(mail, otp.code);
 
+    if (!res.sent) {
+      console.error(`[OTP] สมัครบัญชีแล้วแต่ส่งอีเมลไม่สำเร็จ -> ${mail}: ${res.error || 'mail provider is not configured'}`);
+      return NextResponse.json(
+        { ok: false, error: 'ยังส่งรหัสยืนยันไม่ได้ กรุณาลองใหม่อีกครั้งภายหลัง' },
+        { status: 503 },
+      );
+    }
+
     return NextResponse.json({
       ok: true,
       needVerify: true,
       email: mail,
       emailSent: res.sent,
       mailConfigured: mailConfigured(),
-      note: res.sent
-        ? 'ส่งรหัสยืนยันไปที่อีเมลแล้ว (เช็คกล่องสแปมด้วยนะ)'
-        : 'ระบบส่งอีเมลยังไม่เปิดใช้ — แจ้งแอดมินให้กด "ยืนยันบัญชี" ให้คุณได้เลย',
+      note: 'ส่งรหัสยืนยันไปที่อีเมลแล้ว (เช็คกล่องสแปมด้วยนะ)',
     });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });

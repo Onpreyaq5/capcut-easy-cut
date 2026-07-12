@@ -1,6 +1,7 @@
 'use client';
 // หน้าราคา (freemium) — โชว์ 3 แพ็กเกจ + ไฮไลต์แพ็กเกจปัจจุบัน + แถบโควตาที่ใช้ไป
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Check, Sparkles, Loader2, Crown } from 'lucide-react';
 import { PLANS, fmtMinutes, type PlanId } from '@/lib/planInfo';
 
@@ -166,7 +167,7 @@ export default function PricingPage() {
 
       {!loading && !me?.ok && (
         <p className="mt-6 text-center text-xs text-text-muted">
-          <a href="/" className="font-semibold text-primary hover:underline">เข้าสู่ระบบ</a> เพื่อดูโควตาและอัปเกรดแพ็กเกจ
+          <Link href="/" className="font-semibold text-primary hover:underline">เข้าสู่ระบบ</Link> เพื่อดูโควตาและอัปเกรดแพ็กเกจ
         </p>
       )}
     </div>

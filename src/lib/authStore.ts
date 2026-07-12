@@ -166,11 +166,16 @@ interface OtpRec {
   lastSentAt: number;     // กันสแปมกดส่งซ้ำ
 }
 
+interface ResetRec extends OtpRec { email: string; }
+interface ResetTokenRec { email: string; exp: number; }
+
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SESS_FILE = path.join(DATA_DIR, 'sessions.json');
 const OTP_FILE = path.join(DATA_DIR, 'otps.json');
 const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
+const RESET_OTPS_FILE = path.join(DATA_DIR, 'reset-otps.json');
+const RESET_TOKENS_FILE = path.join(DATA_DIR, 'reset-tokens.json');
 export const SESSION_COOKIE = 'ec_session';
 const SESSION_DAYS = 30;
 const OTP_TTL_MS = 10 * 60_000;       // รหัส OTP อยู่ได้ 10 นาที
@@ -244,6 +249,73 @@ async function writeJsonAtomic(file: string, data: unknown) {
 
 export async function listUsers(): Promise<UserRec[]> {
   return readJson<UserRec[]>(USERS_FILE, []);
+}
+
+export async function issuePasswordResetOtp(email: string): Promise<{ code?: string; exists: boolean; error?: string }> {
+  email = email.trim().toLowerCase();
+  const user = (await listUsers()).find((u) => u.email === email && u.verified);
+  if (!user) return { exists: false };
+  return withLock(RESET_OTPS_FILE, async () => {
+    const all = await readJson<Record<string, ResetRec>>(RESET_OTPS_FILE, {});
+    const now = Date.now();
+    const existing = all[email];
+    if (existing && now - existing.lastSentAt < OTP_RESEND_MS) {
+      return { exists: true, error: 'กรุณารอสักครู่ก่อนขอรหัสใหม่' };
+    }
+    const code = genOtp();
+    const salt = randomBytes(16).toString('hex');
+    all[email] = { email, hash: hashSecret(code, salt), salt, exp: now + OTP_TTL_MS, attempts: 0, lastSentAt: now };
+    await writeJsonAtomic(RESET_OTPS_FILE, all);
+    return { exists: true, code };
+  });
+}
+
+export async function verifyPasswordResetOtp(email: string, code: string): Promise<{ ok: boolean; token?: string; error?: string }> {
+  email = email.trim().toLowerCase();
+  const checked = await withLock(RESET_OTPS_FILE, async () => {
+    const all = await readJson<Record<string, ResetRec>>(RESET_OTPS_FILE, {});
+    const rec = all[email];
+    if (!rec || rec.exp < Date.now()) return { ok: false, error: 'รหัสหมดอายุหรือไม่ถูกต้อง' };
+    if (rec.attempts >= OTP_MAX_ATTEMPTS) return { ok: false, error: 'ใส่รหัสผิดเกินกำหนด กรุณาขอรหัสใหม่' };
+    if (!safeEqualHex(hashSecret(String(code || ''), rec.salt), rec.hash)) {
+      rec.attempts += 1;
+      await writeJsonAtomic(RESET_OTPS_FILE, all);
+      return { ok: false, error: `รหัสไม่ถูกต้อง (เหลือ ${OTP_MAX_ATTEMPTS - rec.attempts} ครั้ง)` };
+    }
+    delete all[email];
+    await writeJsonAtomic(RESET_OTPS_FILE, all);
+    return { ok: true };
+  });
+  if (!checked.ok) return checked;
+  const token = randomBytes(32).toString('hex');
+  await withLock(RESET_TOKENS_FILE, async () => {
+    const all = await readJson<Record<string, ResetTokenRec>>(RESET_TOKENS_FILE, {});
+    all[token] = { email, exp: Date.now() + 10 * 60_000 };
+    await writeJsonAtomic(RESET_TOKENS_FILE, all);
+  });
+  return { ok: true, token };
+}
+
+export async function resetPassword(token: string, password: string): Promise<{ ok: boolean; error?: string }> {
+  if (password.length < 8) return { ok: false, error: 'รหัสผ่านใหม่ต้องยาวอย่างน้อย 8 ตัวอักษร' };
+  const email = await withLock(RESET_TOKENS_FILE, async () => {
+    const all = await readJson<Record<string, ResetTokenRec>>(RESET_TOKENS_FILE, {});
+    const rec = all[token];
+    if (!rec || rec.exp < Date.now()) return '';
+    delete all[token];
+    await writeJsonAtomic(RESET_TOKENS_FILE, all);
+    return rec.email;
+  });
+  if (!email) return { ok: false, error: 'ลิงก์เปลี่ยนรหัสหมดอายุ กรุณาเริ่มใหม่' };
+  return withLock(USERS_FILE, async () => {
+    const users = await readJson<UserRec[]>(USERS_FILE, []);
+    const user = users.find((u) => u.email === email);
+    if (!user) return { ok: false, error: 'ไม่พบบัญชี' };
+    user.salt = randomBytes(16).toString('hex');
+    user.hash = hashSecret(password, user.salt);
+    await writeJsonAtomic(USERS_FILE, users);
+    return { ok: true };
+  });
 }
 
 export async function listPayments(): Promise<PaymentRec[]> {

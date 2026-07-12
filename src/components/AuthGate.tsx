@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { LogIn, LogOut, Loader2, Mail, Lock, Sparkles, UserPlus, ShieldCheck, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { fmtMinutes } from '@/lib/planInfo';
 
-type Mode = 'login' | 'signup' | 'verify';
+type Mode = 'login' | 'signup' | 'verify' | 'forgot' | 'forgotVerify' | 'newPassword';
 
 interface Me {
   email: string;
@@ -26,6 +26,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const check = useCallback(async () => {
     try {
@@ -118,6 +121,35 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const forgot = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setError('');
+    try {
+      const r = await fetch('/api/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+      const d = await r.json(); if (!d.ok) throw new Error(d.error || 'ส่งรหัสไม่สำเร็จ');
+      setNote(d.note); setCode(''); setMode('forgotVerify');
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); }
+  };
+
+  const verifyForgot = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setError('');
+    try {
+      const r = await fetch('/api/auth/forgot-password/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, code }) });
+      const d = await r.json(); if (!d.ok) throw new Error(d.error || 'รหัสไม่ถูกต้อง');
+      setResetToken(d.token); setMode('newPassword');
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); }
+  };
+
+  const saveNewPassword = async (e: React.FormEvent) => {
+    e.preventDefault(); setError('');
+    if (newPassword !== confirmPassword) { setError('รหัสผ่านทั้งสองช่องไม่ตรงกัน'); return; }
+    setBusy(true);
+    try {
+      const r = await fetch('/api/auth/forgot-password/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: resetToken, password: newPassword, confirmPassword }) });
+      const d = await r.json(); if (!d.ok) throw new Error(d.error || 'เปลี่ยนรหัสไม่สำเร็จ');
+      setPassword(''); setNewPassword(''); setConfirmPassword(''); setNote('เปลี่ยนรหัสผ่านแล้ว กรุณาเข้าสู่ระบบ'); setMode('login');
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); }
+  };
+
   const logout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
     setMe(null);
@@ -140,7 +172,37 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             <span className="text-xs font-bold tracking-wide">CAPCUT EASY CUT</span>
           </div>
 
-          {mode === 'verify' ? (
+          {mode === 'forgot' ? (
+            <ResetShell title="ลืมรหัสผ่าน" subtitle="ใส่อีเมลที่ใช้สมัคร เราจะส่งรหัส OTP เพื่อยืนยันว่าเป็นเจ้าของบัญชี">
+              <form onSubmit={forgot} className="space-y-3">
+                <label className="block text-xs font-semibold text-text-secondary">อีเมล
+                  <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="mt-1 w-full rounded-xl border-2 border-slate-300 bg-white px-3 py-3 text-base text-slate-950 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-white" />
+                </label>
+                {error && <p className="text-xs font-semibold text-red-500">{error}</p>}
+                <PrimaryButton busy={busy} label="ส่งรหัส OTP" />
+              </form>
+              <BackButton onClick={() => setMode('login')} />
+            </ResetShell>
+          ) : mode === 'forgotVerify' ? (
+            <ResetShell title="ยืนยัน OTP" subtitle={`ใส่รหัส 6 หลักที่ส่งไปยัง ${email}`}>
+              {note && <p className="mb-3 rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary">{note}</p>}
+              <form onSubmit={verifyForgot} className="space-y-3">
+                <input aria-label="OTP สำหรับเปลี่ยนรหัสผ่าน" inputMode="numeric" autoComplete="one-time-code" required maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} placeholder="______" className="w-full rounded-xl border-2 border-slate-300 bg-white px-3 py-3 text-center text-2xl font-bold tracking-[0.4em] text-slate-950 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-white" />
+                {error && <p className="text-xs font-semibold text-red-500">{error}</p>}
+                <PrimaryButton busy={busy} disabled={code.length !== 6} label="ยืนยัน OTP" />
+              </form>
+              <BackButton onClick={() => setMode('forgot')} />
+            </ResetShell>
+          ) : mode === 'newPassword' ? (
+            <ResetShell title="ตั้งรหัสผ่านใหม่" subtitle="รหัสผ่านใหม่ทั้งสองช่องต้องตรงกันและยาวอย่างน้อย 8 ตัวอักษร">
+              <form onSubmit={saveNewPassword} className="space-y-3">
+                <PasswordField label="รหัสผ่านใหม่" value={newPassword} onChange={setNewPassword} />
+                <PasswordField label="ยืนยันรหัสผ่านใหม่" value={confirmPassword} onChange={setConfirmPassword} />
+                {error && <p className="text-xs font-semibold text-red-500">{error}</p>}
+                <PrimaryButton busy={busy} disabled={newPassword.length < 8 || confirmPassword.length < 8} label="บันทึกรหัสผ่านใหม่" />
+              </form>
+            </ResetShell>
+          ) : mode === 'verify' ? (
             <>
               <h1 className="flex items-center gap-2 text-xl font-bold text-text-primary">
                 <ShieldCheck className="h-5 w-5 text-primary" /> ยืนยันอีเมล
@@ -216,6 +278,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
               <button onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); }} className="mt-4 w-full text-center text-xs font-semibold text-primary hover:underline">
                 {mode === 'signup' ? 'มีบัญชีแล้ว? เข้าสู่ระบบ' : 'ยังไม่มีบัญชี? สมัครใช้งานฟรี'}
               </button>
+              {mode === 'login' && <button onClick={() => { setMode('forgot'); setError(''); setNote(''); }} className="mt-3 w-full text-center text-xs font-semibold text-text-secondary hover:text-primary hover:underline">ลืมรหัสผ่าน?</button>}
             </>
           )}
         </div>
@@ -244,4 +307,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
+}
+
+function ResetShell({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
+  return <><h1 className="text-xl font-bold text-text-primary">{title}</h1><p className="mb-5 mt-1 text-xs text-text-secondary">{subtitle}</p>{children}</>;
+}
+function PrimaryButton({ busy, disabled, label }: { busy: boolean; disabled?: boolean; label: string }) {
+  return <button type="submit" disabled={busy || disabled} className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-white hover:bg-primary-hover disabled:opacity-50">{busy && <Loader2 className="h-4 w-4 animate-spin" />}{label}</button>;
+}
+function BackButton({ onClick }: { onClick: () => void }) { return <button type="button" onClick={onClick} className="mt-4 inline-flex min-h-11 items-center gap-1 text-xs font-semibold text-text-secondary hover:text-primary"><ArrowLeft className="h-4 w-4" /> กลับ</button>; }
+function PasswordField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const [shown, setShown] = useState(false);
+  return <label className="block text-xs font-semibold text-text-secondary">{label}<div className="relative mt-1"><input type={shown ? 'text' : 'password'} required minLength={8} autoComplete="new-password" value={value} onChange={(e) => onChange(e.target.value)} placeholder="อย่างน้อย 8 ตัวอักษร" className="w-full rounded-xl border-2 border-slate-300 bg-white px-3 py-3 pr-12 text-base text-slate-950 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-950 dark:text-white" /><button type="button" onClick={() => setShown(!shown)} aria-label={shown ? `ซ่อน${label}` : `แสดง${label}`} className="absolute inset-y-0 right-0 min-h-11 min-w-11 text-slate-600 dark:text-slate-300">{shown ? <EyeOff className="mx-auto h-5 w-5" /> : <Eye className="mx-auto h-5 w-5" />}</button></div></label>;
 }

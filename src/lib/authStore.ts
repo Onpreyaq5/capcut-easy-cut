@@ -9,6 +9,16 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { NextRequest } from 'next/server';
 
+export type Plan = 'free' | 'pro' | 'studio';
+
+// ลิมิตต่อแพ็กเกจ (freemium) — วินาที/เดือน, ความละเอียดสูงสุด, ลายน้ำ
+export interface PlanLimit { label: string; secondsPerMonth: number; maxHeight: number; watermark: boolean; capcutZip: boolean; }
+export const PLAN_LIMITS: Record<Plan, PlanLimit> = {
+  free:   { label: 'Free',   secondsPerMonth: 10 * 60,  maxHeight: 720,  watermark: true,  capcutZip: false },
+  pro:    { label: 'Pro',    secondsPerMonth: 120 * 60, maxHeight: 1080, watermark: false, capcutZip: true  },
+  studio: { label: 'Studio', secondsPerMonth: 500 * 60, maxHeight: 2160, watermark: false, capcutZip: true  },
+};
+
 export interface UserRec {
   email: string;
   hash: string;
@@ -19,6 +29,54 @@ export interface UserRec {
   createdAt: string;
   loginCount: number;
   lastLoginAt: string;
+  plan?: Plan;            // แพ็กเกจ (default free) — owner ถือเป็น studio เสมอ
+  usedSeconds?: number;   // วินาทีที่ใช้เรนเดอร์/ถอดเสียงในเดือนนี้
+  usageMonth?: string;    // เดือนของ usedSeconds (YYYY-MM) — เปลี่ยนเดือน = รีเซ็ต
+}
+
+// แพ็กเกจจริงที่มีผล (owner = studio เสมอ)
+export function effectivePlan(u: UserRec): Plan {
+  return u.role === 'owner' ? 'studio' : (u.plan || 'free');
+}
+
+function monthKey(): string {
+  // YYYY-MM จาก ISO (เลี่ยง Date locale) — ใช้ substring ของ toISOString
+  return new Date().toISOString().slice(0, 7);
+}
+
+// โควตาที่เหลือของ user (รีเซ็ตอัตโนมัติเมื่อขึ้นเดือนใหม่)
+export function quotaOf(u: UserRec): { plan: Plan; limit: PlanLimit; usedSeconds: number; remainingSeconds: number } {
+  const plan = effectivePlan(u);
+  const limit = PLAN_LIMITS[plan];
+  const used = u.usageMonth === monthKey() ? (u.usedSeconds || 0) : 0;
+  return { plan, limit, usedSeconds: used, remainingSeconds: Math.max(0, limit.secondsPerMonth - used) };
+}
+
+/** เพิ่มการใช้งาน (วินาที) หลังเรนเดอร์/ถอดเสียงสำเร็จ — รีเซ็ตยอดเมื่อขึ้นเดือนใหม่ */
+export async function addUsage(email: string, seconds: number): Promise<void> {
+  email = email.trim().toLowerCase();
+  await withLock(USERS_FILE, async () => {
+    const users = await readJson<UserRec[]>(USERS_FILE, []);
+    const u = users.find((x) => x.email === email);
+    if (!u) return;
+    const mk = monthKey();
+    if (u.usageMonth !== mk) { u.usageMonth = mk; u.usedSeconds = 0; }
+    u.usedSeconds = (u.usedSeconds || 0) + Math.max(0, Math.round(seconds));
+    await writeJsonAtomic(USERS_FILE, users);
+  });
+}
+
+/** ตั้งแพ็กเกจให้ user (ใช้ตอนสมัคร Pro สำเร็จ / แอดมินปรับ) */
+export async function setPlan(email: string, plan: Plan): Promise<boolean> {
+  email = email.trim().toLowerCase();
+  return withLock(USERS_FILE, async () => {
+    const users = await readJson<UserRec[]>(USERS_FILE, []);
+    const u = users.find((x) => x.email === email);
+    if (!u) return false;
+    u.plan = plan;
+    await writeJsonAtomic(USERS_FILE, users);
+    return true;
+  });
 }
 
 interface SessionRec {

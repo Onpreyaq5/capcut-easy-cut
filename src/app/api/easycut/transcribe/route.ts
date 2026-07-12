@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import Busboy from 'busboy';
 import { Readable } from 'node:stream';
 import { createWriteStream, promises as fs } from 'node:fs';
-import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { getSessionUser } from '@/lib/authStore';
+import { groqEnabled, transcribeGroq, transcribeLocal } from '@/lib/transcribe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,30 +46,12 @@ export async function POST(req: NextRequest) {
     const { saved } = await saveUpload(req, videoPath);
     if (!saved) return NextResponse.json({ ok: false, error: 'ไม่มีไฟล์วิดีโอ' }, { status: 400 });
 
-    const result = await new Promise<{ ok: boolean; words?: unknown[]; error?: string }>((resolve) => {
-      const child = spawn('python', ['-u', 'transcribe_only.py', videoPath], {
-        cwd: TOOL_DIR,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-      });
-      let out = '';
-      let err = '';
-      child.stdout.on('data', (d) => { out += d.toString(); });
-      child.stderr.on('data', (d) => { err += d.toString(); });
-      child.on('error', (e) => resolve({ ok: false, error: 'รัน python ไม่ได้: ' + e.message }));
-      child.on('close', (code) => {
-        const marker = out.lastIndexOf('__RESULT__');
-        if (marker >= 0) {
-          try {
-            const json = JSON.parse(out.slice(marker + '__RESULT__'.length).trim());
-            resolve(json);
-            return;
-          } catch { /* fallthrough */ }
-        }
-        resolve({ ok: false, error: `ถอดเสียงไม่สำเร็จ (code ${code}) ${err.slice(-400)}` });
-      });
-    });
+    // pluggable: Groq (คลาวด์ ไม่ต้อง Python) ถ้ามีคีย์ ไม่งั้น faster-whisper ในเครื่อง
+    const words = groqEnabled()
+      ? await transcribeGroq(videoPath)
+      : await transcribeLocal(videoPath, TOOL_DIR);
 
-    return NextResponse.json(result, { status: result.ok ? 200 : 500 });
+    return NextResponse.json({ ok: true, words, engine: groqEnabled() ? 'groq' : 'local' });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   } finally {

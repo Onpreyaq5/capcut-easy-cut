@@ -93,6 +93,7 @@ def main():
     ap.add_argument("--project", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--watermark", action="store_true", help="ใส่ลายน้ำ (สำหรับ Free tier)")
+    ap.add_argument("--max-height", type=int, default=0, help="จำกัดความสูงสูงสุด (0 = ไม่จำกัด) ตามแพ็กเกจ")
     a = ap.parse_args()
 
     if not os.path.exists(a.video):
@@ -106,6 +107,7 @@ def main():
         return
 
     W, H = cc.ffprobe_wh(a.video)
+    dur = cc.ffprobe_dur(a.video)
     template = (style.get("template") or "karaoke").strip()
     karaoke = template in _KARAOKE
     ass = build_ass(lines, style, W, H, karaoke, bool(style.get("noSpace")))
@@ -124,6 +126,9 @@ def main():
                     shutil.copy2(os.path.join(src_fonts, f), fonts_dir)
 
         vf = "subtitles=subs.ass:fontsdir=fonts"
+        # จำกัดความละเอียดตามแพ็กเกจ (เช่น Free = 720p) — ย่อเฉพาะเมื่อสูงเกิน
+        if a.max_height and H > a.max_height:
+            vf += f",scale=-2:{a.max_height}"
         if a.watermark:
             # drawtext บน Windows ต้องระบุ fontfile (relative กัน path colon) — เลือกฟอนต์ที่ copy มาแล้ว
             wm_font = "fonts/Kanit.ttf" if os.path.exists(os.path.join(fonts_dir, "Kanit.ttf")) else None
@@ -140,7 +145,7 @@ def main():
             print("__RESULT__" + json.dumps({"ok": False, "error": "ffmpeg เรนเดอร์ไม่สำเร็จ: " + (r.stderr or "")[-500:]}, ensure_ascii=False), flush=True)
             return
         size = os.path.getsize(out_abs)
-        print("__RESULT__" + json.dumps({"ok": True, "out": out_abs, "w": W, "h": H, "bytes": size, "karaoke": karaoke}, ensure_ascii=False), flush=True)
+        print("__RESULT__" + json.dumps({"ok": True, "out": out_abs, "w": W, "h": H, "dur": round(dur, 2), "bytes": size, "karaoke": karaoke}, ensure_ascii=False), flush=True)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

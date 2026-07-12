@@ -5,7 +5,7 @@ import { createWriteStream, promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { getSessionUser } from '@/lib/authStore';
+import { getSessionUser, quotaOf, addUsage } from '@/lib/authStore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,6 +41,15 @@ export async function POST(req: NextRequest) {
   const user = await getSessionUser(req);
   if (!user) return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
 
+  // เช็คโควตาตามแพ็กเกจ (freemium) — บล็อกถ้าใช้ครบเดือนนี้แล้ว
+  const q = quotaOf(user);
+  if (q.remainingSeconds <= 0) {
+    return NextResponse.json(
+      { ok: false, code: 'quota', plan: q.plan, error: `ใช้โควตาแพ็กเกจ ${q.limit.label} ครบเดือนนี้แล้ว — อัปเกรดเป็น Pro เพื่อเรนเดอร์ต่อ` },
+      { status: 402 },
+    );
+  }
+
   const tmp = path.join(os.tmpdir(), `easycut_rv_${Date.now()}`);
   await fs.mkdir(tmp, { recursive: true });
   const videoDest = path.join(tmp, 'clip.mp4');
@@ -51,12 +60,12 @@ export async function POST(req: NextRequest) {
     if (!videoPath || !project) return NextResponse.json({ ok: false, error: 'ต้องมีทั้งวิดีโอและซับ' }, { status: 400 });
     await fs.writeFile(projPath, project, 'utf8');
 
-    // Free tier = ใส่ลายน้ำ; owner/pro = ไม่ใส่ (ตอนนี้ owner ยังไม่มีระบบ tier จริง → owner ถือเป็น pro)
-    const watermark = user.role !== 'owner';
-    const args = ['-u', 'render_video.py', '--video', videoPath, '--project', projPath, '--out', outPath];
-    if (watermark) args.push('--watermark');
+    // ลายน้ำ + ความละเอียด ตามแพ็กเกจ
+    const args = ['-u', 'render_video.py', '--video', videoPath, '--project', projPath, '--out', outPath,
+      '--max-height', String(q.limit.maxHeight)];
+    if (q.limit.watermark) args.push('--watermark');
 
-    const result = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    const result = await new Promise<{ ok: boolean; error?: string; dur?: number }>((resolve) => {
       const child = spawn('python', args, { cwd: TOOL_DIR, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
       let outBuf = '';
       let errBuf = '';
@@ -70,6 +79,9 @@ export async function POST(req: NextRequest) {
       });
     });
     if (!result.ok) return NextResponse.json(result, { status: 500 });
+
+    // บันทึกการใช้งานตามความยาวคลิป (ตัดโควตา)
+    if (result.dur && result.dur > 0) await addUsage(user.email, result.dur);
 
     // ส่งไฟล์วิดีโอกลับให้ดาวน์โหลด
     const buf = await fs.readFile(outPath);

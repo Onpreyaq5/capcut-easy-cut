@@ -163,6 +163,33 @@ export default function SubtitleEditor() {
     }
   };
 
+  const [rendering, setRendering] = useState(false);
+  const renderVideo = async () => {
+    if (!videoFile || !hasSub) return;
+    setRendering(true);
+    setProgress('กำลังเรนเดอร์วิดีโอฝังซับ… (อาจใช้เวลาสักครู่ตามความยาวคลิป)');
+    try {
+      const fd = new FormData();
+      fd.append('video', videoFile);
+      fd.append('project', JSON.stringify({ lines, style }));
+      const res = await fetch('/api/easycut/render', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: 'เรนเดอร์ไม่สำเร็จ' }));
+        throw new Error(d.error || 'เรนเดอร์ไม่สำเร็จ');
+      }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (videoName.replace(/\.[^.]+$/, '') || 'easycut') + '-subtitled.mp4';
+      a.click();
+      setProgress('✅ ดาวน์โหลดวิดีโอฝังซับแล้ว');
+    } catch (e) {
+      setProgress('❌ ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setRendering(false);
+    }
+  };
+
   const exportSRT = () => {
     const srt = toSRT(lines, style.noSpace);
     const blob = new Blob([srt], { type: 'text/plain;charset=utf-8' });
@@ -213,7 +240,10 @@ export default function SubtitleEditor() {
           <button onClick={exportSRT} disabled={!hasSub} className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-secondary hover:border-primary/50 disabled:opacity-40">
             <Download size={14} /> ส่งออก SRT
           </button>
-          <button onClick={sendToCapcut} disabled={!hasSub || !videoFile || building} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary/90 disabled:opacity-50">
+          <button onClick={renderVideo} disabled={!hasSub || !videoFile || rendering} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary/90 disabled:opacity-50">
+            {rendering ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} ดาวน์โหลดวิดีโอ (ฝังซับ)
+          </button>
+          <button onClick={sendToCapcut} disabled={!hasSub || !videoFile || building} className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-secondary hover:border-primary/50 disabled:opacity-50">
             {building ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />} ส่งเข้า CapCut
           </button>
         </div>

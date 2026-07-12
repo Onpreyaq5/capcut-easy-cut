@@ -19,7 +19,13 @@ export function mailConfigured(): boolean {
 
 async function sendViaResend(to: string, code: string): Promise<{ sent: boolean; error?: string }> {
   try {
-    const from = process.env.EASYCUT_MAIL_FROM || 'CAPCUT Easy CUT <onboarding@resend.dev>';
+    const configuredFrom = (process.env.RESEND_MAIL_FROM || process.env.EASYCUT_MAIL_FROM || '').trim();
+    // Gmail/Outlook addresses can be valid SMTP senders but cannot be used as a
+    // Resend sender domain. Keep those settings for SMTP and use Resend's
+    // verified onboarding sender until a custom domain is connected.
+    const from = configuredFrom && !/@(?:gmail|googlemail|outlook|hotmail)\.[^>\s]+>?$/i.test(configuredFrom)
+      ? configuredFrom
+      : 'CAPCUT Easy CUT <onboarding@resend.dev>';
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },

@@ -3,12 +3,15 @@
 // เก็บเฉพาะอีเมล "จริง" ที่ยืนยันแล้ว ไว้ทำโปรโมชั่น (กันอีเมลปลอม)
 import { useCallback, useEffect, useState } from 'react';
 import { LogIn, LogOut, Loader2, Mail, Lock, Sparkles, UserPlus, ShieldCheck, ArrowLeft } from 'lucide-react';
+import { fmtMinutes } from '@/lib/planInfo';
 
 type Mode = 'login' | 'signup' | 'verify';
 
 interface Me {
   email: string;
   role: 'owner' | 'user';
+  planLabel?: string;
+  remainingSeconds?: number;
 }
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
@@ -28,7 +31,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       const r = await fetch('/api/auth/me');
       if (r.ok) {
         const d = await r.json();
-        setMe({ email: d.email, role: d.role });
+        setMe({ email: d.email, role: d.role, planLabel: d.planLabel, remainingSeconds: d.remainingSeconds });
       } else setMe(null);
     } catch {
       setMe(null);
@@ -66,7 +69,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       return;
     }
     if (!d.ok) throw new Error(d.error || 'เข้าสู่ระบบไม่สำเร็จ');
-    setMe({ email: d.email, role: d.role });
+    await check();
   };
 
   const doVerify = async () => {
@@ -77,7 +80,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'ยืนยันไม่สำเร็จ');
-    setMe({ email: d.email, role: d.role });
+    await check();
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -214,8 +217,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   return (
     <div>
-      <div className="mx-auto flex max-w-6xl items-center justify-end gap-2 px-4 pt-3 text-xs">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-end gap-2 px-4 pt-3 text-xs">
         <span className="rounded-full border border-border bg-surface px-3 py-1 font-semibold text-text-secondary">👤 {me.email}</span>
+        <a href="/pricing" className="rounded-full border border-primary/30 bg-primary-soft px-3 py-1 font-semibold text-primary hover:bg-primary/10" title="ดูแพ็กเกจ / อัปเกรด">
+          {me.planLabel || 'Free'}
+          {me.remainingSeconds != null && <span className="ml-1 font-normal opacity-80">· เหลือ {fmtMinutes(me.remainingSeconds)}</span>}
+        </a>
         {me.role === 'owner' && (
           <a href="/admin" className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 font-semibold text-primary hover:bg-primary/20">หลังบ้าน</a>
         )}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { issueOtp, listUsers, rateLimit, clientIp } from '@/lib/authStore';
-import { sendOtpEmail, smtpConfigured } from '@/lib/mailer';
+import { sendOtpEmail, mailConfigured } from '@/lib/mailer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
       if ('error' in otp) return NextResponse.json({ ok: false, error: otp.error }, { status: 429 });
       await sendOtpEmail(mail, otp.code);
     }
-    return NextResponse.json({ ok: true, smtpConfigured: smtpConfigured() });
+    return NextResponse.json({ ok: true, mailConfigured: mailConfigured() });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

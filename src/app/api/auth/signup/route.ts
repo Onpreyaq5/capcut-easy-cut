@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createUser, issueOtp, rateLimit, clientIp, validEmail } from '@/lib/authStore';
-import { sendOtpEmail, smtpConfigured } from '@/lib/mailer';
+import { sendOtpEmail, mailConfigured } from '@/lib/mailer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,10 +27,10 @@ export async function POST(req: NextRequest) {
       needVerify: true,
       email: mail,
       emailSent: res.sent,
-      smtpConfigured: smtpConfigured(),
+      mailConfigured: mailConfigured(),
       note: res.sent
-        ? 'ส่งรหัสยืนยันไปที่อีเมลแล้ว'
-        : 'ยังไม่ได้ตั้งค่าอีเมล (SMTP) — ดูรหัสยืนยันได้ในคอนโซลของเซิร์ฟเวอร์',
+        ? 'ส่งรหัสยืนยันไปที่อีเมลแล้ว (เช็คกล่องสแปมด้วยนะ)'
+        : 'ระบบส่งอีเมลยังไม่เปิดใช้ — แจ้งแอดมินให้กด "ยืนยันบัญชี" ให้คุณได้เลย',
     });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });

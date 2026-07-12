@@ -66,6 +66,19 @@ export async function addUsage(email: string, seconds: number): Promise<void> {
   });
 }
 
+/** แอดมินยืนยันบัญชีให้ลูกค้า (ใช้ตอนระบบอีเมลยังไม่เปิด/ลูกค้าไม่ได้รับรหัส) */
+export async function adminVerifyUser(email: string): Promise<boolean> {
+  email = email.trim().toLowerCase();
+  return withLock(USERS_FILE, async () => {
+    const users = await readJson<UserRec[]>(USERS_FILE, []);
+    const u = users.find((x) => x.email === email);
+    if (!u) return false;
+    u.verified = true;
+    await writeJsonAtomic(USERS_FILE, users);
+    return true;
+  });
+}
+
 /** ตั้งแพ็กเกจให้ user (ใช้ตอนสมัคร Pro สำเร็จ / แอดมินปรับ) */
 export async function setPlan(email: string, plan: Plan): Promise<boolean> {
   email = email.trim().toLowerCase();

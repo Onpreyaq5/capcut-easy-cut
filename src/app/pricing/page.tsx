@@ -16,6 +16,23 @@ export default function PricingPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [upgrading, setUpgrading] = useState<PlanId | null>(null);
+  // QR พร้อมเพย์สำหรับจ่ายอัปเกรด
+  const [qr, setQr] = useState<{ qr: string; amount: number; name: string; plan: string } | null>(null);
+  const [qrErr, setQrErr] = useState('');
+
+  const openUpgrade = async (plan: PlanId) => {
+    setUpgrading(plan);
+    setQr(null);
+    setQrErr('');
+    try {
+      const r = await fetch(`/api/pay/promptpay?plan=${plan}`);
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || 'สร้าง QR ไม่สำเร็จ');
+      setQr(d);
+    } catch (e) {
+      setQrErr(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   useEffect(() => {
     fetch('/api/auth/me')
@@ -105,7 +122,7 @@ export default function PricingPage() {
 
               <button
                 disabled={loading || isCurrent || upgrading !== null || p.id === 'free'}
-                onClick={() => setUpgrading(p.id)}
+                onClick={() => openUpgrade(p.id)}
                 className={`mt-5 flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition-colors disabled:opacity-60 ${
                   p.highlight
                     ? 'bg-primary text-white hover:bg-primary-hover'
@@ -119,15 +136,29 @@ export default function PricingPage() {
         })}
       </div>
 
-      {/* แจ้งเตือนอัปเกรด (ยังไม่มีระบบจ่ายเงินจริง) */}
+      {/* จ่ายด้วยพร้อมเพย์ — สแกน QR โอน แล้วแอดมินเปิดแพ็กเกจให้ */}
       {upgrading && (
-        <div className="mx-auto mt-6 max-w-lg rounded-xl border border-primary/30 bg-primary-soft p-4 text-center text-sm text-text-secondary">
-          <p className="font-semibold text-text-primary">ระบบชำระเงินกำลังจะเปิดเร็ว ๆ นี้ 🚀</p>
-          <p className="mt-1 text-xs">
-            ตอนนี้อัปเกรดแพ็กเกจ <b>{PLANS.find((p) => p.id === upgrading)?.name}</b> ได้โดยติดต่อแอดมินโดยตรง —
-            เมื่อต่อระบบจ่ายเงิน (บัตร/PromptPay) เสร็จ ปุ่มนี้จะกดจ่ายได้ทันที
+        <div className="mx-auto mt-6 max-w-md rounded-2xl border border-primary/30 bg-surface p-6 text-center">
+          <p className="text-sm font-bold text-text-primary">
+            อัปเกรดเป็น {PLANS.find((p) => p.id === upgrading)?.name} — จ่ายด้วยพร้อมเพย์
           </p>
-          <button onClick={() => setUpgrading(null)} className="mt-2 text-xs font-semibold text-primary hover:underline">
+          {qrErr && <p className="mt-3 text-xs font-semibold text-red-500">{qrErr}</p>}
+          {!qr && !qrErr && <p className="mt-3 text-xs text-text-muted">กำลังสร้าง QR…</p>}
+          {qr && (
+            <>
+              {/* QR สร้างจากเซิร์ฟเวอร์ (มาตรฐาน EMVCo) — สแกนด้วยแอปธนาคารใดก็ได้ */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={qr.qr} alt="PromptPay QR" className="mx-auto mt-4 w-56 rounded-xl border border-border bg-white p-2" />
+              <p className="mt-3 text-lg font-extrabold text-text-primary">฿{qr.amount}</p>
+              <p className="text-xs text-text-muted">บัญชีพร้อมเพย์: {qr.name || 'เจ้าของเว็บ'}</p>
+              <ol className="mx-auto mt-4 max-w-xs space-y-1.5 text-left text-xs text-text-secondary">
+                <li>1. สแกน QR ด้วยแอปธนาคาร แล้วโอนตามยอด</li>
+                <li>2. เก็บสลิปไว้ แล้วส่งให้แอดมิน (อีเมล/ช่องทางติดต่อของเว็บ)</li>
+                <li>3. แอดมินตรวจสลิปแล้วเปิดแพ็กเกจให้ทันที</li>
+              </ol>
+            </>
+          )}
+          <button onClick={() => { setUpgrading(null); setQr(null); }} className="mt-4 text-xs font-semibold text-primary hover:underline">
             ปิด
           </button>
         </div>

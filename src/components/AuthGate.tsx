@@ -172,6 +172,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                   ขอรหัสใหม่
                 </button>
               </div>
+              <p className="mt-3 text-center text-[11px] text-text-muted">
+                ไม่ได้รับอีเมล? เช็คกล่องสแปม หรือติดต่อแอดมินให้กดยืนยันบัญชีให้ แล้วกลับมาเข้าสู่ระบบได้เลย
+              </p>
             </>
           ) : (
             <>

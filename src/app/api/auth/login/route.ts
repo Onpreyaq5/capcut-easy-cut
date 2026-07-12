@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyLogin, createSession, issueOtp, rateLimit, clientIp, SESSION_COOKIE, sessionCookieOptions } from '@/lib/authStore';
-import { sendOtpEmail, smtpConfigured } from '@/lib/mailer';
+import { sendOtpEmail, mailConfigured } from '@/lib/mailer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
       if (r.needVerify) {
         const otp = await issueOtp(mail);
         if (!('error' in otp)) await sendOtpEmail(mail, otp.code);
-        return NextResponse.json({ ok: false, needVerify: true, email: mail, smtpConfigured: smtpConfigured(), error: r.error }, { status: 403 });
+        return NextResponse.json({ ok: false, needVerify: true, email: mail, mailConfigured: mailConfigured(), error: r.error }, { status: 403 });
       }
       return NextResponse.json({ ok: false, error: r.error }, { status: 401 });
     }

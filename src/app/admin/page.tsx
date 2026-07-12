@@ -7,6 +7,8 @@ interface Row {
   email: string;
   role: string;
   consent: boolean;
+  verified?: boolean;
+  plan?: string;
   createdAt: string;
   loginCount: number;
   lastLoginAt: string;
@@ -22,13 +24,47 @@ interface Stats {
 export default function AdminPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
 
-  useEffect(() => {
+  const reload = () =>
     fetch('/api/auth/admin/users')
       .then((r) => r.json())
       .then((d) => (d.ok ? setStats(d) : setError(d.error || 'โหลดไม่สำเร็จ')))
       .catch((e) => setError(String(e)));
+
+  useEffect(() => {
+    reload();
   }, []);
+
+  // แอดมินยืนยันบัญชีให้ลูกค้า (ตอนอีเมลยังไม่เปิด/ลูกค้าไม่ได้รับรหัส)
+  const verifyUser = async (email: string) => {
+    setBusy(email);
+    try {
+      await fetch('/api/auth/admin/verify-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      await reload();
+    } finally {
+      setBusy('');
+    }
+  };
+
+  // เปลี่ยนแพ็กเกจลูกค้า (เช่น ตรวจสลิปโอนแล้วเปิด Pro ให้)
+  const changePlan = async (email: string, plan: string) => {
+    setBusy(email);
+    try {
+      await fetch('/api/auth/admin/setplan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, plan }),
+      });
+      await reload();
+    } finally {
+      setBusy('');
+    }
+  };
 
   if (error) {
     return (
@@ -76,9 +112,10 @@ export default function AdminPage() {
           <thead>
             <tr className="border-b border-border text-text-muted">
               <th className="px-3 py-2.5 font-semibold">อีเมล</th>
+              <th className="px-3 py-2.5 font-semibold">สถานะ</th>
+              <th className="px-3 py-2.5 font-semibold">แพ็กเกจ</th>
               <th className="px-3 py-2.5 font-semibold">สมัครเมื่อ</th>
               <th className="px-3 py-2.5 font-semibold">เข้าใช้ (ครั้ง)</th>
-              <th className="px-3 py-2.5 font-semibold">ล่าสุด</th>
               <th className="px-3 py-2.5 font-semibold">รับโปรโมชั่น</th>
             </tr>
           </thead>
@@ -88,9 +125,39 @@ export default function AdminPage() {
                 <td className="px-3 py-2 font-semibold text-text-primary">
                   {u.email} {u.role === 'owner' && <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">เจ้าของ</span>}
                 </td>
+                <td className="px-3 py-2">
+                  {u.verified ? (
+                    <span className="font-semibold text-success">✓ ยืนยันแล้ว</span>
+                  ) : (
+                    <button
+                      onClick={() => verifyUser(u.email)}
+                      disabled={busy === u.email}
+                      className="rounded-md bg-primary px-2 py-1 text-[11px] font-bold text-white hover:opacity-90 disabled:opacity-50"
+                      title="ยืนยันบัญชีให้ลูกค้า (กรณีไม่ได้รับอีเมลรหัส)"
+                    >
+                      ยืนยันให้
+                    </button>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {u.role === 'owner' ? (
+                    <span className="font-semibold text-primary">Studio</span>
+                  ) : (
+                    <select
+                      value={u.plan || 'free'}
+                      disabled={busy === u.email}
+                      onChange={(e) => changePlan(u.email, e.target.value)}
+                      className="rounded-md border border-border bg-background px-1.5 py-1 text-[11px] text-text-primary"
+                      title="เปลี่ยนแพ็กเกจ (เช่น ตรวจสลิปโอนแล้วเปิด Pro ให้)"
+                    >
+                      <option value="free">Free</option>
+                      <option value="pro">Pro</option>
+                      <option value="studio">Studio</option>
+                    </select>
+                  )}
+                </td>
                 <td className="px-3 py-2">{fmt(u.createdAt)}</td>
                 <td className="px-3 py-2">{u.loginCount}</td>
-                <td className="px-3 py-2">{fmt(u.lastLoginAt)}</td>
                 <td className="px-3 py-2">{u.consent ? '✅' : '—'}</td>
               </tr>
             ))}

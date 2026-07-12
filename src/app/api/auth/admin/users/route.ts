@@ -15,6 +15,8 @@ export async function GET(req: NextRequest) {
     email: u.email,
     role: u.role,
     consent: u.consent,
+    verified: u.verified,          // ยืนยันอีเมลแล้วหรือยัง (แอดมินกดยืนยันแทนได้)
+    plan: u.role === 'owner' ? 'studio' : (u.plan || 'free'),
     createdAt: u.createdAt,
     loginCount: u.loginCount,
     lastLoginAt: u.lastLoginAt,

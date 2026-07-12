@@ -12,9 +12,38 @@ export function resendConfigured(): boolean {
   return !!process.env.RESEND_API_KEY;
 }
 
+export function brevoConfigured(): boolean {
+  return !!(process.env.BREVO_API_KEY && process.env.BREVO_SENDER_EMAIL);
+}
+
 // มีช่องทางส่งอีเมลจริงอย่างน้อย 1 ทางไหม
 export function mailConfigured(): boolean {
-  return smtpConfigured() || resendConfigured();
+  return brevoConfigured() || resendConfigured() || smtpConfigured();
+}
+
+async function sendViaBrevo(to: string, code: string): Promise<{ sent: boolean; error?: string }> {
+  try {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'api-key': process.env.BREVO_API_KEY!, 'Content-Type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        sender: { name: 'CAPCUT Easy CUT', email: process.env.BREVO_SENDER_EMAIL },
+        to: [{ email: to }],
+        subject: `รหัสยืนยันอีเมล: ${code}`,
+        textContent: `รหัสยืนยันของคุณคือ ${code}\nรหัสนี้ใช้ได้ภายใน 10 นาที\n\nหากคุณไม่ได้ดำเนินการ กรุณาละเว้นอีเมลนี้`,
+        htmlContent: `<div style="font-family:sans-serif;max-width:420px;margin:auto"><h2 style="color:#2563eb">CAPCUT Easy CUT</h2><p>รหัสยืนยันของคุณคือ</p><div style="font-size:32px;font-weight:800;letter-spacing:6px;background:#eff6ff;border-radius:12px;padding:16px;text-align:center;color:#0f172a">${code}</div><p style="color:#475569;font-size:13px">รหัสนี้ใช้ได้ภายใน 10 นาที · หากคุณไม่ได้ดำเนินการ กรุณาละเว้นอีเมลนี้</p></div>`,
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      return { sent: false, error: `Brevo ส่งไม่สำเร็จ (${response.status}) ${detail.slice(0, 180)}` };
+    }
+    console.log(`[OTP] ส่งอีเมลสำเร็จผ่าน Brevo -> ${to}`);
+    return { sent: true };
+  } catch (error) {
+    return { sent: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function sendViaResend(to: string, code: string): Promise<{ sent: boolean; error?: string }> {
@@ -54,14 +83,19 @@ async function sendViaResend(to: string, code: string): Promise<{ sent: boolean;
 }
 
 export async function sendOtpEmail(to: string, code: string): Promise<{ sent: boolean; error?: string }> {
-  // ลำดับ: Resend (ง่ายสุด) -> SMTP -> ไม่มีทั้งคู่ = log ในคอนโซลเซิร์ฟเวอร์ (ไม่ส่งไป client เด็ดขาด)
+  // Brevo ใช้ HTTPS และส่งหาผู้ใช้ทั่วไปได้ จึงเป็นช่องทางหลักบน Render
+  if (brevoConfigured()) {
+    const result = await sendViaBrevo(to, code);
+    if (result.sent) return result;
+    console.error(`[OTP] Brevo ไม่สำเร็จ กำลังลองช่องทางสำรอง: ${result.error || 'unknown error'}`);
+  }
   if (resendConfigured()) {
     const result = await sendViaResend(to, code);
-    if (result.sent || !smtpConfigured()) return result;
+    if (result.sent) return result;
     console.error(`[OTP] Resend ไม่สำเร็จ กำลังลอง SMTP สำรอง: ${result.error || 'unknown error'}`);
   }
   if (!smtpConfigured()) {
-    console.log(`\n[OTP] ยังไม่ได้ตั้งระบบอีเมล — รหัสยืนยันสำหรับ ${to} คือ: ${code}\n(ตั้ง RESEND_API_KEY หรือ EASYCUT_SMTP_* เพื่อส่งอีเมลจริง — หรือให้แอดมินกดยืนยันในหลังบ้าน)\n`);
+    console.log(`\n[OTP] ยังไม่ได้ตั้งระบบอีเมล — รหัสยืนยันสำหรับ ${to} คือ: ${code}\n(ตั้ง BREVO_API_KEY, RESEND_API_KEY หรือ EASYCUT_SMTP_* เพื่อส่งอีเมลจริง)\n`);
     return { sent: false };
   }
   try {

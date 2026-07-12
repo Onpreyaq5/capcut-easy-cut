@@ -131,6 +131,12 @@ function SfxRow({ label, file, onPick, onClear }: { label: string; file: File | 
 
 export function EasyCutTool() {
   const [files, setFiles] = useState<File[]>([]);
+  // ความสามารถของเซิร์ฟเวอร์ — โหมดตัดออโต้ใช้ engine ในเครื่อง (whisper/CapCut) บนคลาวด์ต้องพาไปใช้ตัวแก้ซับแทน
+  const [caps, setCaps] = useState<{ localEngine: boolean } | null>(null);
+  useEffect(() => {
+    fetch('/api/easycut/capabilities').then((r) => r.json()).then(setCaps).catch(() => setCaps({ localEngine: true }));
+  }, []);
+  const cloudOnly = caps?.localEngine === false;
   const [projectName, setProjectName] = useState('CAPCUT_Easy_CUT');
   const [deadAir, setDeadAir] = useState(true);
   const [hookText, setHookText] = useState('');
@@ -768,12 +774,22 @@ export function EasyCutTool() {
               </div>
             </div>
 
+            {cloudOnly && (
+              <div className="mb-3 rounded-lg border border-primary/30 bg-primary-soft p-3 text-xs text-text-secondary">
+                <p className="font-semibold text-primary">โหมดตัดออโต้เต็มรูปแบบใช้ได้ในแอปเวอร์ชันติดตั้งบนเครื่อง</p>
+                <p className="mt-1">
+                  บนเว็บ ใช้หน้า{' '}
+                  <a href="/editor" className="font-semibold text-primary underline">ตัวแก้ซับ</a>{' '}
+                  ได้เลย — ถอดเสียงทำซับ แก้คำ เลือกสไตล์ และดาวน์โหลดวิดีโอฝังซับ
+                </p>
+              </div>
+            )}
             <div className="grid gap-3">
-              <Button variant="primary" size="lg" className="w-full" loading={busy === 'zip'} disabled={!files.length || isBusy} onClick={downloadPackage}>
+              <Button variant="primary" size="lg" className="w-full" loading={busy === 'zip'} disabled={!files.length || isBusy || cloudOnly} onClick={downloadPackage}>
                 <Download className="h-4 w-4" />
                 ดาวน์โหลดแพ็กเกจ
               </Button>
-              <Button variant="outline" size="lg" className="w-full" loading={busy === 'capcut'} disabled={!files.length || isBusy} onClick={createCapCutProject}>
+              <Button variant="outline" size="lg" className="w-full" loading={busy === 'capcut'} disabled={!files.length || isBusy || cloudOnly} onClick={createCapCutProject}>
                 <Scissors className="h-4 w-4" />
                 สร้างใน CapCut
               </Button>

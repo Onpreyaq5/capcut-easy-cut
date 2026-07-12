@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { createJobDirs, startJob, type JobMode } from '@/lib/easycutJobs';
 import { getSessionUser } from '@/lib/authStore';
+import { isCloud } from '@/lib/platform';
 
 // เช็คว่ามี CapCut เปิดค้างอยู่ไหม (Windows) — ถ้าสร้างโปรเจกต์ขณะ CapCut เปิด คลิปจะขึ้นสีแดง Media Not Found
 function capcutIsRunning(): boolean {
@@ -158,6 +159,14 @@ export async function POST(req: NextRequest) {
   // ต้องเข้าสู่ระบบก่อนใช้งาน (เก็บสถิติลูกค้า + กันยิง API ตรงโดยไม่ login)
   if (!(await getSessionUser(req))) {
     return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+  }
+  // โหมดตัดออโต้เต็มรูปแบบใช้ whisper/CapCut ในเครื่อง — บนคลาวด์ยังไม่รองรับ
+  // ปฏิเสธ "ก่อน" รับไฟล์ ไม่ให้ผู้ใช้เสียเวลาอัปโหลดแล้วค่อยพัง
+  if (isCloud()) {
+    return NextResponse.json(
+      { ok: false, code: 'cloud', error: 'โหมดตัดออโต้ใช้ได้ในแอปเวอร์ชันติดตั้งบนเครื่อง (Windows) — บนเว็บใช้หน้า "ตัวแก้ซับ" ได้เลย: ถอดเสียง แก้ซับ และดาวน์โหลดวิดีโอฝังซับ' },
+      { status: 501 },
+    );
   }
   // อ่าน mode จาก query ก่อน (เพื่อรู้กติกาการกรองไฟล์ก่อนเริ่มสตรีม) — เผื่อไม่ได้ส่งก็ default zip
   const mode = ((req.nextUrl.searchParams.get('mode') as JobMode) || 'zip') as JobMode;

@@ -6,6 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { getSessionUser } from '@/lib/authStore';
+import { isCloud } from '@/lib/platform';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,6 +52,13 @@ function parse(req: NextRequest, videoDest: string): Promise<Parsed> {
 export async function POST(req: NextRequest) {
   if (!(await getSessionUser(req))) {
     return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+  }
+  // สร้างโปรเจกต์ CapCut ต้องมี CapCut ติดตั้ง — ทำได้เฉพาะแอปเวอร์ชันเครื่อง ไม่ใช่เซิร์ฟเวอร์คลาวด์
+  if (isCloud()) {
+    return NextResponse.json(
+      { ok: false, code: 'cloud', error: 'ส่งเข้า CapCut ใช้ได้ในแอปเวอร์ชันติดตั้งบนเครื่อง — บนเว็บใช้ปุ่ม "ดาวน์โหลดวิดีโอ (ฝังซับ)" แทนได้เลย' },
+      { status: 501 },
+    );
   }
   const tmp = path.join(os.tmpdir(), `easycut_ed_${Date.now()}`);
   await fs.mkdir(tmp, { recursive: true });

@@ -46,6 +46,12 @@ export default function SubtitleEditor() {
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(0);
 
+  // ความสามารถของเซิร์ฟเวอร์ (เครื่องผู้ใช้ = ส่งเข้า CapCut ได้ / คลาวด์ = ดาวน์โหลดวิดีโอแทน)
+  const [caps, setCaps] = useState<{ capcut: boolean } | null>(null);
+  useEffect(() => {
+    fetch('/api/easycut/capabilities').then((r) => r.json()).then(setCaps).catch(() => setCaps({ capcut: true }));
+  }, []);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -243,9 +249,11 @@ export default function SubtitleEditor() {
           <button onClick={renderVideo} disabled={!hasSub || !videoFile || rendering} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary/90 disabled:opacity-50">
             {rendering ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} ดาวน์โหลดวิดีโอ (ฝังซับ)
           </button>
-          <button onClick={sendToCapcut} disabled={!hasSub || !videoFile || building} className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-secondary hover:border-primary/50 disabled:opacity-50">
-            {building ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />} ส่งเข้า CapCut
-          </button>
+          {caps?.capcut !== false && (
+            <button onClick={sendToCapcut} disabled={!hasSub || !videoFile || building} className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-secondary hover:border-primary/50 disabled:opacity-50">
+              {building ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />} ส่งเข้า CapCut
+            </button>
+          )}
         </div>
       </div>
 

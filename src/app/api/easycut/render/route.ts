@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Busboy from 'busboy';
 import { Readable } from 'node:stream';
-import { createWriteStream, promises as fs } from 'node:fs';
+import { createWriteStream, createReadStream, promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
   const videoDest = path.join(tmp, 'clip.mp4');
   const projPath = path.join(tmp, 'project.json');
   const outPath = path.join(tmp, 'out.mp4');
+  let streaming = false; // เมื่อเริ่มสตรีมแล้ว การลบไฟล์ชั่วคราวเป็นหน้าที่ของ stream ไม่ใช่ finally
   try {
     const { videoPath, project } = await parse(req, videoDest);
     if (!videoPath || !project) return NextResponse.json({ ok: false, error: 'ต้องมีทั้งวิดีโอและซับ' }, { status: 400 });
@@ -83,18 +84,23 @@ export async function POST(req: NextRequest) {
     // บันทึกการใช้งานตามความยาวคลิป (ตัดโควตา)
     if (result.dur && result.dur > 0) await addUsage(user.email, result.dur);
 
-    // ส่งไฟล์วิดีโอกลับให้ดาวน์โหลด
-    const buf = await fs.readFile(outPath);
-    return new NextResponse(buf as unknown as BodyInit, {
+    // ส่งไฟล์วิดีโอแบบ "สตรีม" — ไม่โหลดทั้งไฟล์เข้า RAM (กัน OOM บนเซิร์ฟเวอร์เล็ก เช่น Render free 512MB)
+    const size = (await fs.stat(outPath)).size;
+    const fileStream = createReadStream(outPath);
+    streaming = true;
+    const cleanup = () => { fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined); };
+    fileStream.once('close', cleanup); // ลบไฟล์ชั่วคราวเมื่อส่งจบ (หรือผู้ใช้ยกเลิกกลางทาง)
+    fileStream.once('error', cleanup);
+    return new NextResponse(Readable.toWeb(fileStream) as unknown as BodyInit, {
       headers: {
         'Content-Type': 'video/mp4',
         'Content-Disposition': 'attachment; filename="easycut-subtitled.mp4"',
-        'Content-Length': String(buf.length),
+        'Content-Length': String(size),
       },
     });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   } finally {
-    fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined);
+    if (!streaming) fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined);
   }
 }

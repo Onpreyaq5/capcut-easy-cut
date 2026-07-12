@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { getSessionUser } from '@/lib/authStore';
 import { groqEnabled, transcribeGroq, transcribeLocal } from '@/lib/transcribe';
+import { isCloud } from '@/lib/platform';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,6 +39,14 @@ function saveUpload(req: NextRequest, dest: string): Promise<{ saved: boolean }>
 export async function POST(req: NextRequest) {
   if (!(await getSessionUser(req))) {
     return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+  }
+  // บนคลาวด์ไม่มี whisper ในเครื่อง — ถ้ายังไม่ตั้ง GROQ_API_KEY ให้บอกตรง ๆ ทันที
+  // (ไม่ปล่อยให้ผู้ใช้อัปคลิปรอนานแล้วค่อยพังด้วย ModuleNotFoundError)
+  if (isCloud() && !groqEnabled()) {
+    return NextResponse.json(
+      { ok: false, code: 'no-groq', error: 'ระบบถอดเสียงยังไม่พร้อม — ผู้ดูแลเว็บต้องตั้งค่า GROQ_API_KEY ใน Environment ก่อน' },
+      { status: 503 },
+    );
   }
   const tmp = path.join(os.tmpdir(), `easycut_tr_${Date.now()}`);
   await fs.mkdir(tmp, { recursive: true });

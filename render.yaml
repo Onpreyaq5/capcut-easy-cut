@@ -1,0 +1,29 @@
+# Render Blueprint — deploy CAPCUT Easy CUT อัตโนมัติ
+# วิธีใช้: Render Dashboard -> New -> Blueprint -> เลือก repo นี้ -> Apply
+# แล้วไปใส่ค่า Environment ที่ sync:false (คีย์ลับ) ในหน้า service เอง
+services:
+  - type: web
+    name: capcut-easy-cut
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: singapore
+    plan: starter          # ffmpeg เรนเดอร์วิดีโอ — free 512MB อาจไม่พอ, starter ปลอดภัยกว่า
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: GROQ_API_KEY            # ถอดเสียงบนคลาวด์ (จำเป็น — ไม่มี torch บนเซิร์ฟเวอร์)
+        sync: false
+      - key: SUPABASE_URL            # ฐานข้อมูลสมาชิก/โควตา (จำเป็นบนคลาวด์ ไม่งั้นข้อมูลหายตอน deploy)
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: EASYCUT_PROMPTPAY_ID    # เบอร์พร้อมเพย์รับเงินสมาชิก
+        sync: false
+      - key: EASYCUT_PROMPTPAY_NAME  # ชื่อบัญชีพร้อมเพย์
+        sync: false
+      - key: EASYCUT_SMTP_HOST       # ส่งอีเมล OTP (ไม่บังคับ)
+        sync: false
+      - key: EASYCUT_SMTP_USER
+        sync: false
+      - key: EASYCUT_SMTP_PASS
+        sync: false

@@ -55,13 +55,17 @@ export async function sendOtpEmail(to: string, code: string): Promise<{ sent: bo
   }
   try {
     const port = Number(process.env.EASYCUT_SMTP_PORT || 465);
+    // App Password ของ Gmail เป็น 16 ตัวไม่มีช่องว่าง — ตัดช่องว่าง/ขึ้นบรรทัด/แท็บที่หลุดติดมาออกให้หมด
+    // (กันเคสวางรหัสมาแล้วมีเว้นวรรค "xxxx xxxx xxxx xxxx" ทำให้ login ไม่ผ่าน)
+    const smtpPass = (process.env.EASYCUT_SMTP_PASS || '').replace(/\s+/g, '');
+    const smtpUser = (process.env.EASYCUT_SMTP_USER || '').trim();
     const transporter = nodemailer.createTransport({
-      host: process.env.EASYCUT_SMTP_HOST,
+      host: (process.env.EASYCUT_SMTP_HOST || '').trim(),
       port,
       secure: port === 465, // 465 = SSL, 587 = STARTTLS
-      auth: { user: process.env.EASYCUT_SMTP_USER, pass: process.env.EASYCUT_SMTP_PASS },
+      auth: { user: smtpUser, pass: smtpPass },
     });
-    const from = process.env.EASYCUT_MAIL_FROM || process.env.EASYCUT_SMTP_USER;
+    const from = (process.env.EASYCUT_MAIL_FROM || process.env.EASYCUT_SMTP_USER || '').trim();
     await transporter.sendMail({
       from: `CAPCUT Easy CUT <${from}>`,
       to,
@@ -74,8 +78,12 @@ export async function sendOtpEmail(to: string, code: string): Promise<{ sent: bo
         <p style="color:#666;font-size:13px">รหัสนี้ใช้ได้ภายใน 10 นาที · หากคุณไม่ได้สมัคร กรุณาละเว้นอีเมลนี้</p>
       </div>`,
     });
+    console.log(`[OTP] ส่งอีเมลสำเร็จผ่าน SMTP -> ${to}`);
     return { sent: true };
   } catch (e) {
-    return { sent: false, error: e instanceof Error ? e.message : String(e) };
+    const msg = e instanceof Error ? e.message : String(e);
+    // log ออกมาให้เห็นสาเหตุจริง (เช่น 535 auth ไม่ผ่าน = App Password ผิด) — ไม่ส่ง error ไปหา client
+    console.error(`[OTP] ส่งอีเมลไม่สำเร็จ (SMTP) -> ${to}: ${msg}`);
+    return { sent: false, error: msg };
   }
 }

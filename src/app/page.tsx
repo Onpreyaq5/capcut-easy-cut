@@ -1,5 +1,10 @@
 import { EasyCutTool } from '@/components/EasyCutTool';
+import { AuthGate } from '@/components/AuthGate';
 
 export default function HomePage() {
-  return <EasyCutTool />;
+  return (
+    <AuthGate>
+      <EasyCutTool />
+    </AuthGate>
+  );
 }

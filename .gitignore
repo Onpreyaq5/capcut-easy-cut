@@ -37,3 +37,6 @@ __pycache__/
 
 # SFX จากคลัง CapCut (ลิขสิทธิ์ — ไม่แจกบน GitHub แต่รวมใน zip)
 tools/capcut-auto/assets/sfx/
+
+# ข้อมูลสมาชิก/ลูกค้า (ส่วนตัว — ห้าม commit เด็ดขาด)
+/data/

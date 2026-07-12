@@ -1,4 +1,5 @@
 import SubtitleEditor from '@/components/editor/SubtitleEditor';
+import { AuthGate } from '@/components/AuthGate';
 
 export const metadata = {
   title: 'ตัวแก้ซับ — CAPCUT Easy CUT',
@@ -6,5 +7,9 @@ export const metadata = {
 };
 
 export default function EditorPage() {
-  return <SubtitleEditor />;
+  return (
+    <AuthGate>
+      <SubtitleEditor />
+    </AuthGate>
+  );
 }

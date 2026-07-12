@@ -5,6 +5,7 @@ import { createWriteStream, promises as fs } from 'node:fs';
 import { spawn, execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { getSessionUser } from '@/lib/authStore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,6 +49,9 @@ function parse(req: NextRequest, videoDest: string): Promise<Parsed> {
 }
 
 export async function POST(req: NextRequest) {
+  if (!(await getSessionUser(req))) {
+    return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+  }
   const tmp = path.join(os.tmpdir(), `easycut_ed_${Date.now()}`);
   await fs.mkdir(tmp, { recursive: true });
   const videoDest = path.join(tmp, 'clip.mp4');

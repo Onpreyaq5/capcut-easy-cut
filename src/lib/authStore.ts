@@ -119,7 +119,38 @@ async function withLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+// ---------- Supabase KV (สำหรับ deploy คลาวด์: ไฟล์ local ไม่ persist บน serverless) ----------
+// ถ้าตั้ง SUPABASE_URL + SUPABASE_SERVICE_KEY -> เก็บ users/sessions/otps เป็น JSON ในตาราง kv
+// ถ้าไม่ตั้ง -> เก็บไฟล์ในเครื่องเหมือนเดิม (logic auth ด้านบน/ล่างไม่เปลี่ยนเลย)
+function sbEnabled(): boolean {
+  return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
+}
+function kvKey(file: string): string {
+  return path.basename(file).replace(/\.json$/, ''); // users / sessions / otps
+}
+function sbHeaders() {
+  const k = process.env.SUPABASE_SERVICE_KEY!;
+  return { apikey: k, Authorization: `Bearer ${k}`, 'Content-Type': 'application/json' };
+}
+async function sbRead<T>(key: string, fallback: T): Promise<T> {
+  const url = `${process.env.SUPABASE_URL}/rest/v1/kv?key=eq.${encodeURIComponent(key)}&select=value`;
+  const r = await fetch(url, { headers: sbHeaders(), cache: 'no-store' });
+  if (!r.ok) throw new Error(`Supabase read ${key} ล้มเหลว (${r.status})`);
+  const rows = (await r.json()) as { value: T }[];
+  return rows.length ? rows[0].value : fallback;
+}
+async function sbWrite(key: string, value: unknown): Promise<void> {
+  const url = `${process.env.SUPABASE_URL}/rest/v1/kv`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { ...sbHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ key, value }),
+  });
+  if (!r.ok) throw new Error(`Supabase write ${key} ล้มเหลว (${r.status})`);
+}
+
 async function readJson<T>(file: string, fallback: T): Promise<T> {
+  if (sbEnabled()) return sbRead<T>(kvKey(file), fallback);
   try {
     return JSON.parse(await fs.readFile(file, 'utf8')) as T;
   } catch {
@@ -129,6 +160,7 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
 
 // เขียนแบบ atomic: เขียนไฟล์ชั่วคราวแล้ว rename (กันไฟล์พังถ้าดับกลางคัน)
 async function writeJsonAtomic(file: string, data: unknown) {
+  if (sbEnabled()) return sbWrite(kvKey(file), data);
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');

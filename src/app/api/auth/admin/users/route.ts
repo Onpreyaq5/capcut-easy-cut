@@ -22,9 +22,15 @@ export async function GET(req: NextRequest) {
 
   // ?format=csv -> ดาวน์โหลดรายชื่ออีเมลไว้ทำแคมเปญ
   if (req.nextUrl.searchParams.get('format') === 'csv') {
+    // กัน CSV injection (ค่าขึ้นต้นด้วย = + - @ อาจถูก Excel มองเป็นสูตร) + escape เครื่องหมายคำพูด
+    const cell = (v: string | number) => {
+      let s = String(v);
+      if (/^[=+\-@]/.test(s)) s = `'${s}`;
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
     const head = 'email,consent,createdAt,loginCount,lastLoginAt';
     const csv = [head, ...rows.map((r) =>
-      [r.email, r.consent ? 'yes' : 'no', r.createdAt, r.loginCount, r.lastLoginAt].join(','),
+      [r.email, r.consent ? 'yes' : 'no', r.createdAt, r.loginCount, r.lastLoginAt].map(cell).join(','),
     )].join('\n');
     return new NextResponse('﻿' + csv, {
       headers: {

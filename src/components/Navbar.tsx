@@ -7,7 +7,8 @@ import { useApp } from '@/lib/store';
 import { cn } from '@/lib/utils';
 
 const links = [
-  { href: '/', label: 'ตัดออโต้' },
+  { href: '/', label: 'หน้าแรก' },
+  { href: '/auto', label: 'ตัดออโต้' },
   { href: '/editor', label: 'ตัวแก้ซับ' },
   { href: '/pricing', label: 'แพ็กเกจ' },
 ];

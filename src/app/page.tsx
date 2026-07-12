@@ -1,10 +1,5 @@
-import { EasyCutTool } from '@/components/EasyCutTool';
-import { AuthGate } from '@/components/AuthGate';
+import Landing from '@/components/Landing';
 
 export default function HomePage() {
-  return (
-    <AuthGate>
-      <EasyCutTool />
-    </AuthGate>
-  );
+  return <Landing />;
 }

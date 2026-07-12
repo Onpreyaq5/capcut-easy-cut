@@ -420,16 +420,16 @@ export function EasyCutTool() {
             <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,.02),rgba(0,0,0,.28))]" />
             <div className="relative z-10 flex h-full flex-col justify-between p-6 sm:p-8">
               <div className="flex items-center justify-between gap-3">
-                <span className="inline-flex items-center gap-2 rounded-md border border-white/35 bg-white/78 px-3 py-2 text-sm font-semibold text-text-primary shadow-sm backdrop-blur">
+                <span className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white/95 px-3 py-2 text-sm font-semibold text-slate-950 shadow-sm backdrop-blur">
                   <UploadCloud className="h-4 w-4 text-primary" />
                   {files.length ? `${files.length} คลิป` : 'ลากคลิปใส่'}
                 </span>
-                <span className="rounded-md border border-white/35 bg-white/70 px-3 py-2 text-xs font-semibold text-text-secondary shadow-sm backdrop-blur">
+                <span className="rounded-md border border-slate-300 bg-white/95 px-3 py-2 text-xs font-bold text-slate-800 shadow-sm backdrop-blur">
                   MP4 · MOV · MKV · WEBM
                 </span>
               </div>
 
-              <div className="max-w-xl rounded-lg border border-white/35 bg-white/82 p-5 shadow-lg backdrop-blur-xl">
+              <div className="max-w-xl rounded-lg border border-slate-300 bg-white/95 p-5 text-slate-950 shadow-lg backdrop-blur-xl">
                 <div className="mb-4 flex h-16 items-end gap-1.5">
                   {waveform.map((height, i) => (
                     <span
@@ -439,10 +439,10 @@ export function EasyCutTool() {
                     />
                   ))}
                 </div>
-                <h2 className="font-heading text-2xl font-bold text-text-primary sm:text-3xl">
+                <h2 className="font-heading text-2xl font-bold text-slate-950 sm:text-3xl">
                   {files.length ? firstFile?.name : 'Drop raw footage'}
                 </h2>
-                <p className="mt-2 text-sm text-text-secondary">
+                <p className="mt-2 text-sm text-slate-700">
                   {files.length ? `${mb(totalSize)} พร้อมประมวลผล` : 'เลือกหลายคลิปได้ ระบบจะเรียงตามลำดับที่อัปโหลด'}
                 </p>
               </div>

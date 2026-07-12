@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import QRCode from 'qrcode';
-import { getSessionUser } from '@/lib/authStore';
+import { createPayment, getSessionUser, type Plan } from '@/lib/authStore';
 import { promptPayPayload, promptPayConfigured, promptPayInfo } from '@/lib/promptpay';
 
 export const runtime = 'nodejs';
@@ -24,5 +24,6 @@ export async function GET(req: NextRequest) {
   const { id, name } = promptPayInfo();
   const payload = promptPayPayload(id, amount);
   const qr = await QRCode.toDataURL(payload, { width: 480, margin: 2 });
-  return NextResponse.json({ ok: true, plan, amount, name, qr });
+  const payment = await createPayment(user.email, plan as Plan, amount);
+  return NextResponse.json({ ok: true, plan, amount, name, qr, paymentId: payment.id });
 }

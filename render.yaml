@@ -25,6 +25,10 @@ services:
         sync: false
       - key: EASYCUT_MAIL_FROM       # เช่น CAPCUT Easy CUT <verify@yourdomain.com>
         sync: false
+      - key: ADMIN_EMAIL             # ชื่อสำหรับปลดล็อกคำสั่งสำคัญในหลังบ้าน
+        sync: false
+      - key: ADMIN_PASSWORD          # เก็บเป็น secret ใน Render เท่านั้น
+        sync: false
       - key: EASYCUT_SMTP_HOST       # ส่งอีเมล OTP (ไม่บังคับ)
         sync: false
       - key: EASYCUT_SMTP_USER

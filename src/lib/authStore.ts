@@ -34,6 +34,18 @@ export interface UserRec {
   usageMonth?: string;    // เดือนของ usedSeconds (YYYY-MM) — เปลี่ยนเดือน = รีเซ็ต
 }
 
+export type PaymentStatus = 'pending' | 'paid' | 'rejected';
+export interface PaymentRec {
+  id: string;
+  email: string;
+  plan: Plan;
+  amount: number;
+  status: PaymentStatus;
+  createdAt: string;
+  paidAt?: string;
+  note?: string;
+}
+
 // แพ็กเกจจริงที่มีผล (owner = studio เสมอ)
 export function effectivePlan(u: UserRec): Plan {
   return u.role === 'owner' ? 'studio' : (u.plan || 'free');
@@ -92,6 +104,55 @@ export async function setPlan(email: string, plan: Plan): Promise<boolean> {
   });
 }
 
+export async function setUsage(email: string, usedSeconds: number): Promise<boolean> {
+  email = email.trim().toLowerCase();
+  return withLock(USERS_FILE, async () => {
+    const users = await readJson<UserRec[]>(USERS_FILE, []);
+    const user = users.find((u) => u.email === email);
+    if (!user) return false;
+    user.usedSeconds = Math.max(0, Math.round(usedSeconds));
+    user.usageMonth = monthKey();
+    await writeJsonAtomic(USERS_FILE, users);
+    return true;
+  });
+}
+
+export async function setUserRole(email: string, role: 'owner' | 'user'): Promise<{ ok: boolean; error?: string }> {
+  email = email.trim().toLowerCase();
+  return withLock(USERS_FILE, async () => {
+    const users = await readJson<UserRec[]>(USERS_FILE, []);
+    const user = users.find((u) => u.email === email);
+    if (!user) return { ok: false, error: 'ไม่พบบัญชี' };
+    if (user.role === 'owner' && role === 'user' && users.filter((u) => u.role === 'owner').length <= 1) {
+      return { ok: false, error: 'ต้องมีเจ้าของระบบอย่างน้อย 1 บัญชี' };
+    }
+    user.role = role;
+    await writeJsonAtomic(USERS_FILE, users);
+    return { ok: true };
+  });
+}
+
+export async function deleteUser(email: string): Promise<{ ok: boolean; error?: string }> {
+  email = email.trim().toLowerCase();
+  const removed = await withLock(USERS_FILE, async () => {
+    const users = await readJson<UserRec[]>(USERS_FILE, []);
+    const user = users.find((u) => u.email === email);
+    if (!user) return { ok: false, error: 'ไม่พบบัญชี' };
+    if (user.role === 'owner' && users.filter((u) => u.role === 'owner').length <= 1) {
+      return { ok: false, error: 'ลบเจ้าของระบบคนสุดท้ายไม่ได้' };
+    }
+    await writeJsonAtomic(USERS_FILE, users.filter((u) => u.email !== email));
+    return { ok: true };
+  });
+  if (!removed.ok) return removed;
+  await withLock(SESS_FILE, async () => {
+    const sessions = await readJson<Record<string, SessionRec>>(SESS_FILE, {});
+    for (const token of Object.keys(sessions)) if (sessions[token].email === email) delete sessions[token];
+    await writeJsonAtomic(SESS_FILE, sessions);
+  });
+  return { ok: true };
+}
+
 interface SessionRec {
   email: string;
   exp: number;
@@ -109,6 +170,7 @@ const DATA_DIR = path.resolve(process.cwd(), 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SESS_FILE = path.join(DATA_DIR, 'sessions.json');
 const OTP_FILE = path.join(DATA_DIR, 'otps.json');
+const PAYMENTS_FILE = path.join(DATA_DIR, 'payments.json');
 export const SESSION_COOKIE = 'ec_session';
 const SESSION_DAYS = 30;
 const OTP_TTL_MS = 10 * 60_000;       // รหัส OTP อยู่ได้ 10 นาที
@@ -182,6 +244,52 @@ async function writeJsonAtomic(file: string, data: unknown) {
 
 export async function listUsers(): Promise<UserRec[]> {
   return readJson<UserRec[]>(USERS_FILE, []);
+}
+
+export async function listPayments(): Promise<PaymentRec[]> {
+  return readJson<PaymentRec[]>(PAYMENTS_FILE, []);
+}
+
+export async function createPayment(email: string, plan: Plan, amount: number): Promise<PaymentRec> {
+  const payment: PaymentRec = {
+    id: randomBytes(10).toString('hex'),
+    email: email.trim().toLowerCase(),
+    plan,
+    amount: Math.max(0, amount),
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+  await withLock(PAYMENTS_FILE, async () => {
+    const all = await readJson<PaymentRec[]>(PAYMENTS_FILE, []);
+    all.unshift(payment);
+    await writeJsonAtomic(PAYMENTS_FILE, all.slice(0, 5000));
+  });
+  return payment;
+}
+
+export async function updatePayment(id: string, status: PaymentStatus, note = ''): Promise<PaymentRec | null> {
+  return withLock(PAYMENTS_FILE, async () => {
+    const all = await readJson<PaymentRec[]>(PAYMENTS_FILE, []);
+    const payment = all.find((p) => p.id === id);
+    if (!payment) return null;
+    payment.status = status;
+    payment.note = note.trim().slice(0, 500);
+    payment.paidAt = status === 'paid' ? new Date().toISOString() : undefined;
+    await writeJsonAtomic(PAYMENTS_FILE, all);
+    return payment;
+  });
+}
+
+export function adminCredentialsValid(email: string, password: string): boolean {
+  const expectedEmail = process.env.ADMIN_EMAIL || 'ADMIN';
+  const expectedPassword = process.env.ADMIN_PASSWORD || '';
+  if (!expectedPassword) return false;
+  const emailA = Buffer.from(String(email));
+  const emailB = Buffer.from(expectedEmail);
+  const passA = Buffer.from(String(password));
+  const passB = Buffer.from(expectedPassword);
+  return emailA.length === emailB.length && passA.length === passB.length
+    && timingSafeEqual(emailA, emailB) && timingSafeEqual(passA, passB);
 }
 
 function hashSecret(secret: string, salt: string): string {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSessionUser, listUsers } from '@/lib/authStore';
+import { getSessionUser, listPayments, listUsers, quotaOf } from '@/lib/authStore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'เฉพาะเจ้าของเว็บเท่านั้น' }, { status: 403 });
   }
   const users = await listUsers();
+  const payments = await listPayments();
   const rows = users.map((u) => ({
     email: u.email,
     role: u.role,
@@ -20,6 +21,9 @@ export async function GET(req: NextRequest) {
     createdAt: u.createdAt,
     loginCount: u.loginCount,
     lastLoginAt: u.lastLoginAt,
+    usedSeconds: quotaOf(u).usedSeconds,
+    limitSeconds: quotaOf(u).limit.secondsPerMonth,
+    revenue: payments.filter((p) => p.email === u.email && p.status === 'paid').reduce((sum, p) => sum + p.amount, 0),
   }));
 
   // ?format=csv -> ดาวน์โหลดรายชื่ออีเมลไว้ทำแคมเปญ
@@ -47,6 +51,10 @@ export async function GET(req: NextRequest) {
     totalUsers: rows.length,
     totalLogins: rows.reduce((s, r) => s + r.loginCount, 0),
     consented: rows.filter((r) => r.consent).length,
+    totalRevenue: payments.filter((p) => p.status === 'paid').reduce((sum, p) => sum + p.amount, 0),
+    monthlyRevenue: payments.filter((p) => p.status === 'paid' && (p.paidAt || '').startsWith(new Date().toISOString().slice(0, 7))).reduce((sum, p) => sum + p.amount, 0),
+    pendingPayments: payments.filter((p) => p.status === 'pending').length,
+    payments,
     users: rows,
   });
 }

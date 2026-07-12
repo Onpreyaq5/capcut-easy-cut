@@ -33,6 +33,8 @@ services:
         sync: false
       - key: ADMIN_PASSWORD          # เก็บเป็น secret ใน Render เท่านั้น
         sync: false
+      - key: OWNER_EMAIL             # อีเมลเดียวที่ bootstrap เป็น owner ได้ตอนสมัคร
+        sync: false
       - key: EASYCUT_SMTP_HOST       # ส่งอีเมล OTP (ไม่บังคับ)
         sync: false
       - key: EASYCUT_SMTP_USER

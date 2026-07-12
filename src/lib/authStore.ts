@@ -490,7 +490,9 @@ export async function createUser(
       email,
       salt,
       hash: hashSecret(password, salt),
-      role: users.some((u) => u.verified) ? 'user' : 'owner', // เจ้าของ = คน "ยืนยันแล้ว" คนแรก
+      // ห้ามยก owner ให้ผู้สมัครคนแรก เพราะ storage/cloud restart อาจทำให้
+      // users ว่างและเปิดช่องให้ผู้ใช้ทั่วไปยึดหลังบ้านได้
+      role: email === (process.env.OWNER_EMAIL || '').trim().toLowerCase() ? 'owner' : 'user',
       consent: !!consent,
       verified: false,
       createdAt: new Date().toISOString(),

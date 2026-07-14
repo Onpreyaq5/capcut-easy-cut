@@ -14,14 +14,16 @@ export const maxDuration = 300; // ถอดเสียง whisper อาจน
 
 const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
 
-// รับวิดีโอ 1 ไฟล์ (สตรีมลงดิสก์) → คืน path
-function saveUpload(req: NextRequest, dest: string): Promise<{ saved: boolean }> {
+// รับวิดีโอ 1 ไฟล์ (สตรีมลงดิสก์) + ฟิลด์ข้อความ (keyterms) → คืน path + fields
+function saveUpload(req: NextRequest, dest: string): Promise<{ saved: boolean; fields: Record<string, string> }> {
   return new Promise((resolve, reject) => {
     const contentType = req.headers.get('content-type') || '';
     if (!contentType.includes('multipart/form-data')) return reject(new Error('ต้องส่ง multipart/form-data'));
     const bb = Busboy({ headers: { 'content-type': contentType } });
     const writes: Promise<void>[] = [];
+    const fields: Record<string, string> = {};
     let saved = false;
+    bb.on('field', (name, val) => { fields[name] = val; });
     bb.on('file', (name, stream) => {
       if (name !== 'clip' || saved) { stream.resume(); return; }
       saved = true;
@@ -29,7 +31,7 @@ function saveUpload(req: NextRequest, dest: string): Promise<{ saved: boolean }>
       writes.push(new Promise<void>((res, rej) => { ws.on('finish', () => res()); ws.on('error', rej); stream.on('error', rej); }));
       stream.pipe(ws);
     });
-    bb.on('close', () => { Promise.all(writes).then(() => resolve({ saved })).catch(reject); });
+    bb.on('close', () => { Promise.all(writes).then(() => resolve({ saved, fields })).catch(reject); });
     bb.on('error', reject);
     if (!req.body) return reject(new Error('ไม่มีข้อมูล'));
     Readable.fromWeb(req.body as Parameters<typeof Readable.fromWeb>[0]).pipe(bb);
@@ -52,12 +54,12 @@ export async function POST(req: NextRequest) {
   await fs.mkdir(tmp, { recursive: true });
   const videoPath = path.join(tmp, 'clip.mp4');
   try {
-    const { saved } = await saveUpload(req, videoPath);
+    const { saved, fields } = await saveUpload(req, videoPath);
     if (!saved) return NextResponse.json({ ok: false, error: 'ไม่มีไฟล์วิดีโอ' }, { status: 400 });
 
     // pluggable: Groq (คลาวด์ ไม่ต้อง Python) ถ้ามีคีย์ ไม่งั้น faster-whisper ในเครื่อง
     const words = groqEnabled()
-      ? await transcribeGroq(videoPath)
+      ? await transcribeGroq(videoPath, fields.keyterms)
       : await transcribeLocal(videoPath, TOOL_DIR);
 
     return NextResponse.json({ ok: true, words, engine: groqEnabled() ? 'groq' : 'local' });

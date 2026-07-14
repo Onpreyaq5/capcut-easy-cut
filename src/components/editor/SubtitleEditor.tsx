@@ -29,6 +29,7 @@ import {
   toSRT,
 } from '@/lib/subtitleTypes';
 import { SubtitleOverlay, OverlayKeyframes } from './SubtitleOverlay';
+import { renderSubtitledVideo } from '@/lib/clientRender';
 
 type Tab = 'text' | 'template' | 'style';
 
@@ -41,6 +42,8 @@ export default function SubtitleEditor() {
   const [style, setStyle] = useState<SubStyle>(DEFAULT_STYLE);
   const [tab, setTab] = useState<Tab>('style');
   const [transcribing, setTranscribing] = useState(false);
+  const [keyterms, setKeyterms] = useState('');   // คลังคำอังกฤษ/แบรนด์ ช่วยถอดเสียงแม่นขึ้น
+  const [cutDeadAir, setCutDeadAir] = useState(true); // ตัดช่วงเงียบตอนดาวน์โหลดวิดีโอ
   const [progress, setProgress] = useState('');
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
@@ -106,6 +109,7 @@ export default function SubtitleEditor() {
     try {
       const fd = new FormData();
       fd.append('clip', videoFile);
+      if (keyterms.trim()) fd.append('keyterms', keyterms.trim());
       const res = await fetch('/api/easycut/transcribe', { method: 'POST', body: fd });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'ถอดเสียงไม่สำเร็จ');
@@ -170,25 +174,31 @@ export default function SubtitleEditor() {
   };
 
   const [rendering, setRendering] = useState(false);
+  // เรนเดอร์ฝั่งเบราว์เซอร์ (มือถือ/คลาวด์) — วาดซับลง canvas + อัดด้วย MediaRecorder ไม่พึ่งเซิร์ฟเวอร์
   const renderVideo = async () => {
-    if (!videoFile || !hasSub) return;
+    const v = videoRef.current;
+    if (!v || !hasSub) return;
     setRendering(true);
-    setProgress('กำลังเรนเดอร์วิดีโอฝังซับ… (อาจใช้เวลาสักครู่ตามความยาวคลิป)');
+    v.pause();
+    setPlaying(false);
+    setProgress('กำลังเตรียมเรนเดอร์… (อย่าปิดหน้านี้ระหว่างเรนเดอร์)');
     try {
-      const fd = new FormData();
-      fd.append('video', videoFile);
-      fd.append('project', JSON.stringify({ lines, style }));
-      const res = await fetch('/api/easycut/render', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({ error: 'เรนเดอร์ไม่สำเร็จ' }));
-        throw new Error(d.error || 'เรนเดอร์ไม่สำเร็จ');
-      }
-      const blob = await res.blob();
+      const wasMuted = v.muted;
+      const { blob, ext } = await renderSubtitledVideo({
+        video: v,
+        lines,
+        style,
+        cutDeadAir,
+        onProgress: (pct, label) => setProgress(`${label} ${pct}%`),
+      });
+      v.muted = wasMuted;
+      v.pause();
+      setPlaying(false);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = (videoName.replace(/\.[^.]+$/, '') || 'easycut') + '-subtitled.mp4';
+      a.download = (videoName.replace(/\.[^.]+$/, '') || 'easycut') + '-subtitled.' + ext;
       a.click();
-      setProgress('✅ ดาวน์โหลดวิดีโอฝังซับแล้ว');
+      setProgress(`✅ ดาวน์โหลดวิดีโอฝังซับแล้ว (.${ext})` + (cutDeadAir ? ' · ตัดช่วงเงียบแล้ว' : ''));
     } catch (e) {
       setProgress('❌ ' + (e instanceof Error ? e.message : String(e)));
     } finally {
@@ -246,8 +256,12 @@ export default function SubtitleEditor() {
           <button onClick={exportSRT} disabled={!hasSub} className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-secondary hover:border-primary/50 disabled:opacity-40">
             <Download size={14} /> ส่งออก SRT
           </button>
-          <button onClick={renderVideo} disabled={!hasSub || !videoFile || rendering} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary/90 disabled:opacity-50">
-            {rendering ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} ดาวน์โหลดวิดีโอ (ฝังซับ)
+          <label className="flex cursor-pointer items-center gap-1 rounded-md border border-border bg-surface px-2 py-1.5 text-[11px] font-semibold text-text-secondary" title="ตัดช่วงที่ไม่มีเสียงพูด/ไม่มีซับออก">
+            <input type="checkbox" checked={cutDeadAir} onChange={(e) => setCutDeadAir(e.target.checked)} className="h-3.5 w-3.5 accent-primary" />
+            ตัดช่วงเงียบ
+          </label>
+          <button onClick={renderVideo} disabled={!hasSub || !videoUrl || rendering} className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary/90 disabled:opacity-50" title="เรนเดอร์บนเครื่องคุณ (ใช้ได้บนมือถือ) — ได้วิดีโอซับฝัง โพสต์ได้เลย">
+            {rendering ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} 📱 ดาวน์โหลดวิดีโอ (ซับฝัง)
           </button>
           {caps?.capcut !== false && (
             <button onClick={sendToCapcut} disabled={!hasSub || !videoFile || building} className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text-secondary hover:border-primary/50 disabled:opacity-50">
@@ -298,14 +312,28 @@ export default function SubtitleEditor() {
               </div>
 
               {!hasSub && (
-                <button
-                  onClick={transcribe}
-                  disabled={transcribing}
-                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  {transcribing ? <Loader2 size={16} className="animate-spin" /> : <Type size={16} />}
-                  {transcribing ? 'กำลังถอดเสียง…' : 'ถอดเสียงทำซับอัตโนมัติ'}
-                </button>
+                <>
+                  <label className="mt-4 block">
+                    <span className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-text-muted">
+                      คลังคำ (ไม่บังคับ) — พิมพ์ศัพท์อังกฤษ/แบรนด์ที่พูดในคลิป ช่วยให้ถอดแม่นขึ้น
+                    </span>
+                    <textarea
+                      value={keyterms}
+                      onChange={(e) => setKeyterms(e.target.value)}
+                      rows={2}
+                      placeholder="เช่น CapCut, TikTok, AI, workflow, iPhone, ชื่อแบรนด์ของคุณ"
+                      className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-xs text-text-primary focus:border-primary focus:outline-none"
+                    />
+                  </label>
+                  <button
+                    onClick={transcribe}
+                    disabled={transcribing}
+                    className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    {transcribing ? <Loader2 size={16} className="animate-spin" /> : <Type size={16} />}
+                    {transcribing ? 'กำลังถอดเสียง…' : 'ถอดเสียงทำซับอัตโนมัติ'}
+                  </button>
+                </>
               )}
               {progress && <p className="mt-2 text-center text-xs text-text-muted">{progress}</p>}
               <button onClick={() => { setVideoUrl(''); setVideoFile(null); }} className="mt-2 flex w-full items-center justify-center gap-1 text-[11px] text-text-muted hover:text-text-secondary">

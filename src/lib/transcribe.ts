@@ -27,7 +27,9 @@ function extractAudio(filePath: string): Promise<string | null> {
 }
 
 // Groq: OpenAI-compatible /audio/transcriptions — ส่งไฟล์เสียงที่บีบแล้ว (หรือไฟล์เดิมถ้าแยกเสียงไม่ได้)
-export async function transcribeGroq(filePath: string): Promise<SubWord[]> {
+// keyterms = "คลังคำ" ที่ผู้ใช้พิมพ์ (ศัพท์อังกฤษ/แบรนด์/ชื่อเฉพาะที่พูดในคลิป) — ใส่เป็น prompt เพื่อให้
+// Whisper ถอดคำพวกนี้แม่นขึ้น แก้ปัญหาพูดไทยปนอังกฤษแล้วถอดมั่ว (code-switching)
+export async function transcribeGroq(filePath: string, keyterms?: string): Promise<SubWord[]> {
   const key = process.env.GROQ_API_KEY!;
   const model = process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3';
   const audioPath = (await extractAudio(filePath)) || filePath;
@@ -48,6 +50,9 @@ export async function transcribeGroq(filePath: string): Promise<SubWord[]> {
   form.append('timestamp_granularities[]', 'word');
   form.append('language', 'th');
   form.append('temperature', '0');
+  // prompt = คลังคำ ช่วยให้ถอดศัพท์เฉพาะ/อังกฤษที่พูดในคลิปแม่นขึ้น (จำกัดความยาวกัน error)
+  const kt = (keyterms || '').trim();
+  if (kt) form.append('prompt', kt.slice(0, 800));
 
   const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',

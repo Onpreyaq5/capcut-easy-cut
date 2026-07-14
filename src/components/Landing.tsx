@@ -185,6 +185,51 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* ===== MODES: มือถือ vs คอม ===== */}
+      <section className="container-page mt-28">
+        <Reveal className="text-center">
+          <Eyebrow>เลือกวิธีใช้</Eyebrow>
+          <h2 className="mt-4 text-3xl font-extrabold text-text-primary sm:text-4xl">ใช้ได้ทั้งมือถือ และคอม</h2>
+          <p className="mx-auto mt-3 max-w-lg text-sm text-text-muted">คลิปเดียวกัน เลือกได้ว่าจะเอาไปโพสต์เลย หรือเปิดแก้ต่อใน CapCut</p>
+        </Reveal>
+        <div className="mx-auto mt-12 grid max-w-3xl gap-5 md:grid-cols-2">
+          <Reveal>
+            <div className="hover-glow flex h-full flex-col rounded-2xl border border-primary/40 bg-surface/70 p-7 backdrop-blur">
+              <span className="text-4xl">📱</span>
+              <h3 className="mt-4 text-lg font-bold text-text-primary">โหมดมือถือ — ได้วิดีโอเสร็จ</h3>
+              <p className="mt-2 text-sm leading-relaxed text-text-muted">
+                อัปคลิปบนมือถือ → ถอดเสียง ทำซับคาราโอเกะ ตัดช่วงเงียบ → <b className="text-text-secondary">ดาวน์โหลดวิดีโอซับฝัง</b> โพสต์ TikTok/Reels ได้เลย ไม่ต้องเปิด CapCut
+              </p>
+              <ul className="mt-4 space-y-1.5 text-xs text-text-muted">
+                <li>✓ เรนเดอร์บนเครื่องคุณเอง เร็ว ไม่ต้องรอคิว</li>
+                <li>✓ ไล่สีทีละคำ + ฟอนต์/สไตล์ครบ</li>
+                <li>✓ ตัดเดดแอร์อัตโนมัติ</li>
+              </ul>
+              <a href="/editor" className="mt-6 inline-flex items-center justify-center rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90">
+                เริ่มบนมือถือ →
+              </a>
+            </div>
+          </Reveal>
+          <Reveal delay={0.08}>
+            <div className="hover-glow flex h-full flex-col rounded-2xl border border-border bg-surface/70 p-7 backdrop-blur">
+              <span className="text-4xl">💻</span>
+              <h3 className="mt-4 text-lg font-bold text-text-primary">โหมดคอม — เปิดใน CapCut</h3>
+              <p className="mt-2 text-sm leading-relaxed text-text-muted">
+                บนคอม (Windows/Mac) ส่งเข้า <b className="text-text-secondary">โปรเจกต์ CapCut</b> ได้เลย — เปิดแอปแล้วแก้ต่อ ปรับซับ ไล่สีทีละคำ ย้ายตำแหน่งได้อิสระ
+              </p>
+              <ul className="mt-4 space-y-1.5 text-xs text-text-muted">
+                <li>✓ ตัดเดดแอร์ + ทำซับให้อัตโนมัติ</li>
+                <li>✓ เปิดเป็นร่าง CapCut แก้ต่อได้เต็มที่</li>
+                <li>✓ ซับไล่สีทีละคำในแอป CapCut</li>
+              </ul>
+              <a href="/auto" className="mt-6 inline-flex items-center justify-center rounded-xl border border-border bg-surface px-5 py-2.5 text-sm font-semibold text-text-secondary transition-colors hover:border-primary/50">
+                เริ่มบนคอม →
+              </a>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
       {/* ===== RESULTS BANNER ===== */}
       <section className="container-page mt-28">
         <Reveal>

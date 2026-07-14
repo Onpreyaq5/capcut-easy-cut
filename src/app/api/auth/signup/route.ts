@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createUser, issueOtp, rateLimit, clientIp, validEmail } from '@/lib/authStore';
+import { createUser, issueOtp, rateLimit, clientIp, validEmail, createSession, SESSION_COOKIE, sessionCookieOptions, REQUIRE_EMAIL_VERIFY } from '@/lib/authStore';
 import { sendOtpEmail, mailConfigured } from '@/lib/mailer';
 
 export const runtime = 'nodejs';
@@ -17,7 +17,15 @@ export async function POST(req: NextRequest) {
     const created = await createUser(mail, String(password || ''), !!consent);
     if (!created.ok) return NextResponse.json({ ok: false, error: created.error }, { status: 400 });
 
-    // ออกรหัส OTP แล้วส่งอีเมล — ยังไม่ให้ session จนกว่าจะยืนยัน
+    // โหมดพับ OTP (ค่าเริ่มต้น): สมัครแล้วเข้าใช้งานได้เลย — ออก session ทันที
+    if (!REQUIRE_EMAIL_VERIFY) {
+      const token = await createSession(mail);
+      const res = NextResponse.json({ ok: true, email: mail, role: created.user?.role || 'user' });
+      res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions());
+      return res;
+    }
+
+    // โหมดยืนยันอีเมล: ออกรหัส OTP แล้วส่งอีเมล — ยังไม่ให้ session จนกว่าจะยืนยัน
     const otp = await issueOtp(mail);
     if ('error' in otp) return NextResponse.json({ ok: false, error: otp.error }, { status: 429 });
     const res = await sendOtpEmail(mail, otp.code);

@@ -465,6 +465,10 @@ export async function confirmOtp(email: string, code: string): Promise<{ ok: boo
 }
 
 // ---------- users ----------
+// พับการยืนยันอีเมล (OTP) ไว้ก่อน — สมัครแล้วเข้าใช้งานได้ทันที (ยังเก็บอีเมลไว้ทำโปรโมชั่นเหมือนเดิม)
+// เปิดกลับเมื่อไรก็ตั้ง env AUTH_REQUIRE_VERIFY=1 (ค่าเริ่มต้น = ปิด = ไม่ต้องยืนยัน)
+export const REQUIRE_EMAIL_VERIFY = process.env.AUTH_REQUIRE_VERIFY === '1';
+
 export async function createUser(
   email: string,
   password: string,
@@ -494,7 +498,7 @@ export async function createUser(
       // users ว่างและเปิดช่องให้ผู้ใช้ทั่วไปยึดหลังบ้านได้
       role: email === (process.env.OWNER_EMAIL || '').trim().toLowerCase() ? 'owner' : 'user',
       consent: !!consent,
-      verified: false,
+      verified: !REQUIRE_EMAIL_VERIFY, // พับ OTP: สมัครแล้วถือว่ายืนยันเลย
       createdAt: new Date().toISOString(),
       loginCount: 0,
       lastLoginAt: '',
@@ -517,7 +521,7 @@ export async function verifyLogin(
     if (!safeEqualHex(hashSecret(password || '', user.salt), user.hash)) {
       return { ok: false, error: 'รหัสผ่านไม่ถูกต้อง' };
     }
-    if (!user.verified) {
+    if (REQUIRE_EMAIL_VERIFY && !user.verified) {
       return { ok: false, needVerify: true, error: 'บัญชีนี้ยังไม่ได้ยืนยันอีเมล — กรุณายืนยันด้วยรหัสที่ส่งไปทางอีเมล' };
     }
     user.loginCount += 1;
@@ -559,7 +563,8 @@ export async function getSessionUser(req: NextRequest): Promise<UserRec | null> 
   if (!sess || sess.exp < Date.now()) return null;
   const users = await listUsers();
   const user = users.find((u) => u.email === sess.email) || null;
-  if (!user || !user.verified) return null; // ยังไม่ยืนยัน = ถือว่าไม่มีสิทธิ์
+  if (!user) return null;
+  if (REQUIRE_EMAIL_VERIFY && !user.verified) return null; // เปิดโหมดยืนยัน: ยังไม่ยืนยัน = ไม่มีสิทธิ์
   return user;
 }
 

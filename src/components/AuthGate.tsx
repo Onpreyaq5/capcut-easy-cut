@@ -56,6 +56,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'สมัครไม่สำเร็จ');
+    // โหมดพับ OTP: สมัครเสร็จได้ session เลย -> เข้าใช้งานทันที
+    if (!d.needVerify) { await check(); return; }
     setMode('verify');
     setNote(d.note || 'ส่งรหัสยืนยันไปที่อีเมลแล้ว');
   };
@@ -247,7 +249,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 {mode === 'signup' ? 'สมัครใช้งานฟรี' : 'เข้าสู่ระบบ'}
               </h1>
               <p className="mb-5 mt-1 text-xs text-text-muted">
-                {mode === 'signup' ? 'ใส่อีเมลจริง (ต้องยืนยันด้วยรหัสที่ส่งไปทางอีเมล) แล้วเริ่มใช้งานได้เลย' : 'ยินดีต้อนรับกลับมา 👋'}
+                {mode === 'signup' ? 'ใส่อีเมล + รหัสผ่าน แล้วเริ่มใช้งานได้เลย (ไม่ต้องยืนยันอีเมล)' : 'ยินดีต้อนรับกลับมา 👋'}
               </p>
               <form onSubmit={submit} className="space-y-3">
                 <label className="block">
@@ -283,7 +285,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           )}
         </div>
         <p className="mt-3 text-center text-[11px] text-text-muted">
-          ต้องยืนยันอีเมลจริงก่อนใช้งาน · รหัสผ่านถูกเข้ารหัส (scrypt)
+          สมัครแล้วใช้งานได้ทันที · รหัสผ่านถูกเข้ารหัส (scrypt)
         </p>
       </div>
     );

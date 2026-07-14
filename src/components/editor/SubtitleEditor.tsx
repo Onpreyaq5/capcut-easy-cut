@@ -462,7 +462,7 @@ export default function SubtitleEditor() {
                   onChange={(e) => setKeyterms(e.target.value)}
                   rows={2}
                   placeholder="เช่น ChatGPT, TikTok, CapCut, AI, ชื่อแบรนด์ของคุณ"
-                  className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-xs text-text-primary focus:border-primary focus:outline-none"
+                  className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-xs text-text-primary focus:border-primary focus:outline-none dark:bg-slate-800 dark:text-white"
                 />
               </label>
               <button onClick={transcribe} disabled={transcribing} className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-white disabled:opacity-60">
@@ -580,7 +580,7 @@ export default function SubtitleEditor() {
             <input
               value={sel.text}
               onChange={(e) => editWordFlat(selIdx, e.target.value)}
-              className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm text-text-primary focus:border-primary focus:outline-none"
+              className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm text-text-primary focus:border-primary focus:outline-none dark:bg-slate-800 dark:text-white"
             />
             <button onClick={() => deleteWord(selIdx)} className="flex h-8 w-8 items-center justify-center rounded-md border border-border text-red-400 hover:border-red-400" title="ลบคำนี้">
               <Trash2 size={14} />
@@ -641,7 +641,7 @@ function TextTab({ lines, lineOffsets, cur, onSeek, onEdit, onSelect, selIdx }: 
                     value={w.text}
                     onFocus={() => onSelect(gi)}
                     onChange={(e) => onEdit(gi, e.target.value)}
-                    className={`min-w-[2ch] rounded border px-1.5 py-0.5 text-xs text-text-primary focus:border-primary focus:outline-none ${selIdx === gi ? 'border-primary bg-primary/10' : 'border-border bg-background'}`}
+                    className={`min-w-[2ch] rounded border px-1.5 py-0.5 text-xs text-text-primary focus:border-primary focus:outline-none dark:bg-slate-800 dark:text-white ${selIdx === gi ? 'border-primary bg-primary/10' : 'border-border bg-background'}`}
                     style={{ width: `${Math.max(2, w.text.length + 1)}ch` }}
                   />
                 );

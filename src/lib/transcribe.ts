@@ -64,11 +64,62 @@ export async function transcribeGroq(filePath: string, keyterms?: string): Promi
     throw new Error(`Groq ถอดเสียงไม่สำเร็จ (${res.status}) ${t.slice(0, 200)}`);
   }
   const data = (await res.json()) as { words?: { word: string; start: number; end: number }[]; segments?: { text: string; start: number; end: number }[] };
-  const words = (data.words || [])
-    .map((w) => ({ word: (w.word || '').trim(), start: Number(w.start), end: Number(w.end) }))
+  const raw = (data.words || [])
+    .map((w) => ({ word: String(w.word ?? ''), start: Number(w.start), end: Number(w.end) }))
     .filter((w) => w.word && Number.isFinite(w.start) && Number.isFinite(w.end))
     .sort((a, b) => a.start - b.start);
-  return words;
+  return resegmentThaiWords(raw);
+}
+
+// ---- แก้บั๊ก Whisper BPE ตัดกลางคำไทย (คำโผล่เป็นเศษตัวอักษร เ/ไ/สระลอย ทีละชิ้น) ----
+// วิธี: กางเศษทั้งหมดเป็น "ตัวอักษร + เวลา" (เกลี่ยเวลาในเศษตามสัดส่วนตัวอักษร)
+// แล้วตัดคำใหม่ด้วย Intl.Segmenter('th') -> ได้คำไทยเต็มคำ พร้อมเวลาเริ่ม/จบต่อคำที่ตรงเสียงเดิม
+// (ตัวเดียวกับที่เคยแก้ในเอนจิน Python ฝั่งเครื่อง — อันนี้สำหรับเส้นทาง Groq บนคลาวด์)
+export function resegmentThaiWords(words: SubWord[]): SubWord[] {
+  if (!words.length) return words;
+  const TH = /[฀-๿]/;
+  const LT = /[A-Za-z0-9]/;
+  const chars: { ch: string; t0: number; t1: number }[] = [];
+  for (const w of words) {
+    const cs = [...w.word];
+    if (!cs.length) continue;
+    const dur = Math.max(0, w.end - w.start);
+    cs.forEach((ch, i) => {
+      // แทรกช่องว่างตรงรอยต่อไทย<->อังกฤษ (เสียงพูดติดกันไม่มีวรรค) ให้ตัดเป็นคนละคำ
+      const prev = chars.length ? chars[chars.length - 1] : null;
+      if (prev && prev.ch !== ' ' && ((TH.test(prev.ch) && LT.test(ch)) || (LT.test(prev.ch) && TH.test(ch)))) {
+        chars.push({ ch: ' ', t0: prev.t1, t1: prev.t1 });
+      }
+      chars.push({ ch, t0: w.start + (dur * i) / cs.length, t1: w.start + (dur * (i + 1)) / cs.length });
+    });
+  }
+  if (!chars.length) return [];
+  const full = chars.map((c) => c.ch).join('');
+  let segIter: Iterable<{ segment: string }>;
+  try {
+    segIter = new Intl.Segmenter('th', { granularity: 'word' }).segment(full);
+  } catch {
+    // ไม่มี ICU ไทย (ไม่น่าเกิดบน Node 20) -> คืนแบบ trim ธรรมดา
+    return words.map((w) => ({ ...w, word: w.word.trim() })).filter((w) => w.word);
+  }
+  const out: SubWord[] = [];
+  let idx = 0;
+  for (const s of segIter) {
+    const n = [...s.segment].length;
+    const c0 = chars[Math.min(idx, chars.length - 1)];
+    const c1 = chars[Math.min(idx + n - 1, chars.length - 1)];
+    idx += n;
+    const t = s.segment.trim();
+    if (!t) continue; // ช่องว่าง
+    // เครื่องหมายวรรคตอนเดี่ยว ๆ -> ผูกเข้าคำก่อนหน้า (ไม่ให้เป็นชิปเปล่า)
+    if (!/[\p{L}\p{N}]/u.test(t) && out.length) {
+      out[out.length - 1].word += t;
+      out[out.length - 1].end = Math.max(out[out.length - 1].end, c1.t1);
+      continue;
+    }
+    out.push({ word: t, start: c0.t0, end: c1.t1 });
+  }
+  return out;
 }
 
 // fallback: รัน faster-whisper ในเครื่องผ่าน transcribe_only.py

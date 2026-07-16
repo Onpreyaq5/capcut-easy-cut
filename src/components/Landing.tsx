@@ -1,28 +1,19 @@
 'use client';
 // หน้า Landing (สาธารณะ) สไตล์ dark futuristic — เนื้อหา CAPCUT Easy CUT จริง
-// ทรานสิชั่น: เลื่อนดูแล้วเฟดขึ้น (framer-motion whileInView) + hover glow
+// ทรานสิชั่น CSS + hover glow
 import { useState } from 'react';
 import Link from 'next/link';
-import { motion } from 'framer-motion';
 import {
   Sparkles, ArrowRight, UploadCloud, AudioLines, Type, Wand2, Download, Film,
   Scissors, Palette, Zap, Check, Star, Plus, Minus, ShieldCheck, Clock,
 } from 'lucide-react';
 import { PLANS } from '@/lib/planInfo';
 
-const ease = [0.22, 0.61, 0.36, 1] as const;
-
 function Reveal({ children, delay = 0, className = '' }: { children: React.ReactNode; delay?: number; className?: string }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 22 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, margin: '-80px' }}
-      transition={{ duration: 0.6, ease, delay }}
-      className={className}
-    >
+    <div className={`animate-in ${className}`} style={{ animationDelay: `${delay}s` }}>
       {children}
-    </motion.div>
+    </div>
   );
 }
 
@@ -327,14 +318,9 @@ export default function Landing() {
                   <span className="text-sm font-bold text-text-primary">{f.q}</span>
                   {openFaq === i ? <Minus className="h-4 w-4 flex-none text-primary" /> : <Plus className="h-4 w-4 flex-none text-text-muted" />}
                 </div>
-                <motion.div
-                  initial={false}
-                  animate={{ height: openFaq === i ? 'auto' : 0, opacity: openFaq === i ? 1 : 0 }}
-                  transition={{ duration: 0.28, ease }}
-                  className="overflow-hidden"
-                >
+                <div className={`overflow-hidden transition-all duration-300 ${openFaq === i ? 'max-h-64 opacity-100' : 'max-h-0 opacity-0'}`}>
                   <p className="pt-3 text-sm leading-relaxed text-text-muted">{f.a}</p>
-                </motion.div>
+                </div>
               </button>
             </Reveal>
           ))}

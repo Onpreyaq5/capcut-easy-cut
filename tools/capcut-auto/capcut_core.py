@@ -7,7 +7,7 @@ capcut_core.py — เอนจินสร้างโปรเจกต์ Cap
 ต้องมี: ffmpeg, ffprobe, faster-whisper, pythainlp
 หน่วยเวลาใน CapCut draft = ไมโครวินาที
 """
-import json, os, io, sys, shutil, uuid, copy, time, re, subprocess, glob, hashlib, tempfile
+import json, os, io, sys, shutil, uuid, copy, time, re, subprocess, glob, hashlib, tempfile, gc, unicodedata
 for _s in (sys.stdout, sys.stderr):
     try: _s.reconfigure(encoding="utf-8")
     except Exception: pass
@@ -465,14 +465,56 @@ def concat_clips(clips, out, target_wh=None):
 
 # ---------- transcribe ----------
 # บริบทช่วยให้ whisper เดาเป็นภาษาไทย ลดการหลอนเป็นอังกฤษ/ภาษาอื่นช่วงต้นคลิป
-_TH_INIT_PROMPT = "ต่อไปนี้เป็นคลิปวิดีโอที่พูดเป็นภาษาไทยทั้งหมด"
+_TH_INIT_PROMPT = (
+    "ต่อไปนี้เป็นคลิปวิดีโอที่พูดเป็นภาษาไทยทั้งหมด ถอดตามเสียงจริงแบบคำต่อคำ "
+    "รักษาชื่อบุคคล ชื่อแบรนด์ ศัพท์อังกฤษ ตัวเลข และหน่วยวัดให้ถูกต้อง"
+)
 # สระอำแบบแยกชิ้น (นิคหิต+สระอา) ที่ whisper มักถอดออกมา -> รวมเป็นสระอำตัวเดียว (ทํา -> ทำ, คํา -> คำ)
 _SARA_AM_FIX = re.compile("ํา")
 
 
 def _normalize_thai(text):
-    """ซ่อมข้อความไทยจาก whisper: รวมสระอำที่ถูกแยกชิ้น (ทํา->ทำ) — ปลอดภัย ไม่เปลี่ยนความหมาย"""
-    return _SARA_AM_FIX.sub("ำ", text or "")
+    """Normalize Unicode/spacing artifacts without rewriting spoken meaning."""
+    text = unicodedata.normalize("NFC", text or "")
+    text = _SARA_AM_FIX.sub("ำ", text)
+    text = text.replace("\u200b", "").replace("\ufeff", "")
+    text = re.sub(r"\s+([,.!?;:ฯ])", r"\1", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def _whisper_profile():
+    profile = os.environ.get("EASYCUT_TRANSCRIBE_QUALITY", "max").strip().lower()
+    return profile if profile in ("fast", "accurate", "max") else "max"
+
+
+def _whisper_context():
+    terms = [x.strip() for x in re.split(r"[,;\n|]+", os.environ.get("EASYCUT_KEYTERMS", "")) if x.strip()]
+    terms = list(dict.fromkeys(terms))[:80]
+    prompt = _TH_INIT_PROMPT
+    # Keep user terms out of initial_prompt. Whisper can copy a long prompt
+    # verbatim into quiet audio; hotwords provide a gentler vocabulary bias.
+    return prompt, " ".join(terms) or None
+
+
+def _prepare_whisper_audio(path):
+    """Create speech-focused mono 16 kHz audio; fall back to the source on any ffmpeg error."""
+    if _whisper_profile() == "fast":
+        return path, None
+    work = tempfile.mkdtemp(prefix="easycut_speech_")
+    out = os.path.join(work, "speech.wav")
+    # Conservative cleanup: remove sub-bass/high-frequency noise and normalize speech.
+    af = "highpass=f=60,lowpass=f=7800,afftdn=nr=8:nf=-35,dynaudnorm=f=150:g=9:p=0.9"
+    result = subprocess.run(
+        [FFMPEG, "-y", "-i", path, "-vn", "-ac", "1", "-ar", "16000", "-af", af,
+         "-c:a", "pcm_s16le", out],
+        capture_output=True, text=True, encoding="utf-8", errors="ignore",
+    )
+    if result.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 1024:
+        print("   ปรับเสียงพูด: denoise + normalize + mono 16 kHz", flush=True)
+        return out, work
+    shutil.rmtree(work, ignore_errors=True)
+    print("   !! ปรับเสียงพูดไม่ได้ ใช้เสียงต้นฉบับแทน", flush=True)
+    return path, None
 
 
 _MODEL = None
@@ -480,27 +522,38 @@ def _load_whisper():
     """โหลดโมเดล whisper แบบยืดหยุ่น: มี GPU ใช้ GPU, ไม่มี fallback CPU
     ปรับได้ผ่าน env: EASYCUT_WHISPER_MODEL (เช่น small/medium/large-v3), EASYCUT_WHISPER_DEVICE"""
     from faster_whisper import WhisperModel
-    # default large-v3 = แม่นสุดสำหรับไทย (ลดการหลอนเป็นภาษาต่างประเทศ) — ตั้ง env เป็น medium/small ได้ถ้าต้องการเร็ว
-    model = os.environ.get("EASYCUT_WHISPER_MODEL", "large-v3").strip() or "large-v3"
+    profile = _whisper_profile()
+    default_model = "small" if profile == "fast" else ("large-v3-turbo" if profile == "max" else "medium")
+    requested = os.environ.get("EASYCUT_WHISPER_MODEL", default_model).strip() or default_model
+    models = [x.strip() for x in requested.split(",") if x.strip()]
+    # Accuracy first, but always retain a memory-safe fallback.
+    if models[0] in ("large-v3", "large-v2") and "medium" not in models:
+        models.append("medium")
+    if "small" not in models:
+        models.append("small")
     device = os.environ.get("EASYCUT_WHISPER_DEVICE", "auto").strip().lower() or "auto"
     tries = []
     if device in ("auto", "cuda"):
         tries.append(("cuda", "float16"))
     tries.append(("cpu", "int8"))
     last = None
-    for dev, ct in tries:
-        try:
-            print(f"   โหลดโมเดล whisper {model} ({dev}/{ct}) — ครั้งแรกใช้เวลาดาวน์โหลด...", flush=True)
-            m = WhisperModel(model, device=dev, compute_type=ct)
-            if dev == "cuda":
-                # CUDA สร้างสำเร็จได้ทั้งที่ cublas/cudnn ยังไม่โหลด — warm-up สั้นๆ ให้โหลด lib จริง
-                # ถ้าเครื่องไม่มี CUDA runtime จะ error ตรงนี้ แล้ว fallback ไป CPU ได้ (ไม่พังตอนถอดเสียงจริง)
-                import numpy as _np
-                list(m.transcribe(_np.zeros(16000, dtype=_np.float32), language="th")[0])
-            return m
-        except Exception as e:
-            last = e
-            print(f"   !! {dev}/{ct} ใช้ไม่ได้ ({str(e)[:80]}) — ลองตัวถัดไป", flush=True)
+    for model in models:
+        for dev, ct in tries:
+            try:
+                print(f"   โหลดโมเดล whisper {model} ({dev}/{ct}, profile={profile}) — ครั้งแรกใช้เวลาดาวน์โหลด...", flush=True)
+                m = WhisperModel(model, device=dev, compute_type=ct)
+                if dev == "cuda":
+                    import numpy as _np
+                    list(m.transcribe(_np.zeros(16000, dtype=_np.float32), language="th")[0])
+                return m
+            except Exception as e:
+                last = e
+                print(f"   !! {model} {dev}/{ct} ใช้ไม่ได้ ({str(e)[:100]}) — ลองตัวถัดไป", flush=True)
+                try:
+                    del m
+                except Exception:
+                    pass
+                gc.collect()
     raise SystemExit(f"โหลดโมเดล whisper ไม่ได้: {last}")
 
 
@@ -510,27 +563,56 @@ def transcribe(path, cache_json=None):
     global _MODEL
     if _MODEL is None:
         _MODEL = _load_whisper()
-    segs, info = _MODEL.transcribe(
-        path, language="th", word_timestamps=True, vad_filter=True,
-        beam_size=max(WHISPER_BEAM, 5), best_of=5, temperature=0.0,
-        condition_on_previous_text=False,   # กันหลอนสะสม (ประโยคก่อนผิดแล้วลากผิดต่อ)
-        no_speech_threshold=0.6,
-        initial_prompt=_TH_INIT_PROMPT,     # บริบทไทย ลดการถอดเป็นภาษาต่างประเทศ
-    )
-    total = float(getattr(info, "duration", 0) or 0)
-    segments, words = [], []
-    last_pct = -10
-    for s in segs:
-        segments.append({"start": round(s.start, 3), "end": round(s.end, 3),
-                         "text": _normalize_thai(s.text.strip())})
-        for w in (s.words or []):
-            words.append({"start": round(w.start, 3), "end": round(w.end, 3),
-                          "word": _normalize_thai(w.word)})
-        if total > 0:
-            pct = int(min(100, s.end / total * 100))
-            if pct >= last_pct + 10:
-                last_pct = pct
-                print(f"   ถอดเสียง... {pct}%", flush=True)
+    profile = _whisper_profile()
+    audio_path, cleanup = _prepare_whisper_audio(path)
+    prompt, hotwords = _whisper_context()
+    # An explicit beam value is a hardware-aware override. This matters on CPU,
+    # where beam 8 can take over an hour for a short clip and risks interruption.
+    beam = WHISPER_BEAM if "EASYCUT_WHISPER_BEAM" in os.environ else (5 if profile == "max" else 3)
+    try:
+        segs, info = _MODEL.transcribe(
+            audio_path, language="th", word_timestamps=True, vad_filter=True,
+            vad_parameters={"threshold": 0.35, "min_speech_duration_ms": 180,
+                            "min_silence_duration_ms": 350, "speech_pad_ms": 220,
+                            "max_speech_duration_s": 30},
+            beam_size=beam, best_of=beam, patience=1.4 if profile == "max" else 1.0,
+            temperature=[0.0, 0.2], repetition_penalty=1.08, no_repeat_ngram_size=3,
+            condition_on_previous_text=False,
+            no_speech_threshold=0.65, log_prob_threshold=-1.2,
+            compression_ratio_threshold=2.4, hallucination_silence_threshold=1.5,
+            initial_prompt=prompt, hotwords=hotwords,
+        )
+        total = float(getattr(info, "duration", 0) or 0)
+        segments, words = [], []
+        last_pct = -10
+        for s in segs:
+            text = _normalize_thai(s.text)
+            # Reject only strong hallucination evidence; keep uncertain real speech.
+            no_speech = float(getattr(s, "no_speech_prob", 0.0) or 0.0)
+            avg_logprob = float(getattr(s, "avg_logprob", 0.0) or 0.0)
+            compression = float(getattr(s, "compression_ratio", 0.0) or 0.0)
+            if not text or (no_speech > 0.88 and avg_logprob < -0.9) or compression > 3.0:
+                continue
+            segments.append({"start": round(s.start, 3), "end": round(s.end, 3),
+                             "text": text, "confidence": round(max(0.0, min(1.0, 1.0 + avg_logprob)), 3)})
+            for w in (s.words or []):
+                raw_word = unicodedata.normalize("NFC", w.word or "")
+                leading_space = bool(raw_word[:1].isspace())
+                word = _normalize_thai(raw_word)
+                if leading_space and word:
+                    word = " " + word
+                if word:
+                    words.append({"start": round(w.start, 3), "end": round(w.end, 3),
+                                  "word": word,
+                                  "probability": round(float(getattr(w, "probability", 0.0) or 0.0), 3)})
+            if total > 0:
+                pct = int(min(100, s.end / total * 100))
+                if pct >= last_pct + 10:
+                    last_pct = pct
+                    print(f"   ถอดเสียง... {pct}%", flush=True)
+    finally:
+        if cleanup:
+            shutil.rmtree(cleanup, ignore_errors=True)
     data = {"segments": segments, "words": words}
     if cache_json:
         json.dump(data, open(cache_json, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
@@ -1971,18 +2053,19 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand, sfx=None):
         cap_style = cap_meta.get("style", "normal")
         start_us, dur_us = int(ns * 1_000_000), int(max(0.05, ne - ns) * 1_000_000)
         hl = cap_meta.get("hl")
-        # วลี highlight สั้นอยู่แล้ว — ไม่ตัดบรรทัด เพื่อรักษาตำแหน่งช่วงสีให้ตรง
-        txt = raw if hl is not None else thai_wrap(raw, lc)
+        # Wrap highlighted phrases too. Long keywords previously escaped wrapping
+        # entirely and could run outside the vertical-video safe area.
+        txt = thai_wrap(raw, lc)
         mid = guid()
         mat = copy.deepcopy(tpl_mat); mat["id"] = mid
         styles = []
         style_size = fs
-        text_size = int(round(fs * 1.9))
+        text_size = int(round(fs * 1.65))
         line_width = 0.90
         if cap_style == "keyword":
-            style_size = fs * 1.55
-            text_size = int(round(fs * 2.8))
-            line_width = 0.96
+            style_size = fs * 1.35
+            text_size = int(round(fs * 2.25))
+            line_width = 0.90
         elif cap_style.startswith("soft_"):
             style_size = fs * 0.82
             text_size = int(round(fs * 1.45))
@@ -1993,13 +2076,23 @@ def build_draft(clip, name, captions, clip_dur_us, scene_kf, brand, sfx=None):
             line_width = 0.92
         elif cap_style == "hook":
             style_size = fs * 1.5
-            text_size = int(round(fs * 2.6))
-            line_width = 0.92
+            text_size = int(round(fs * 2.2))
+            line_width = 0.90
 
         if cap_style == "hook":
             span_list = [(0, len(txt), brand["green"])]
         elif hl is not None:
-            span_list = spans_from_hl(txt, hl, brand)
+            # Newlines replace spaces when wrapping. Re-find highlighted text in
+            # the wrapped value so CapCut style ranges stay aligned.
+            wrapped_hl = []
+            search_from = 0
+            for a, b in hl:
+                needle = raw[a:b]
+                found = txt.find(needle, search_from)
+                if found >= 0:
+                    wrapped_hl.append((found, found + len(needle)))
+                    search_from = found + len(needle)
+            span_list = spans_from_hl(txt, wrapped_hl, brand)
         else:
             span_list = styled_color_spans(txt, brand, cap_style)
         for (a, b, col) in span_list:

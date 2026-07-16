@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 try:
@@ -57,6 +58,31 @@ def caption_style(caption):
     if len(caption) >= 4 and isinstance(caption[3], dict):
         return caption[3].get("style", "normal")
     return "normal"
+
+
+def sanitize_captions(captions):
+    """Prevent burned captions from overlapping or lingering on quiet video."""
+    cleaned = sorted((cap for cap in captions if caption_text(cap).strip()), key=lambda cap: (cap[0], cap[1]))
+    deduped = []
+    for cap in cleaned:
+        if deduped and cap[0] <= deduped[-1][0] + 0.06:
+            left = re.sub(r"[\s.,!?ฯๆ]+", "", caption_text(deduped[-1])).lower()
+            right = re.sub(r"[\s.,!?ฯๆ]+", "", caption_text(cap)).lower()
+            if left and right and (left in right or right in left):
+                if len(right) >= len(left):
+                    deduped[-1] = cap
+                continue
+        deduped.append(cap)
+    result = []
+    for index, cap in enumerate(deduped):
+        start, original_end = float(cap[0]), float(cap[1])
+        chars = len(re.sub(r"\s+", "", caption_text(cap)))
+        end = min(original_end, start + min(2.8, max(0.9, 0.60 + chars / 8.0)))
+        if index + 1 < len(deduped) and end > deduped[index + 1][0]:
+            end = deduped[index + 1][0] - 0.04
+        if end >= start + 0.12:
+            result.append((start, end, *cap[2:]))
+    return result
 
 
 def write_srt(captions, path):
@@ -154,6 +180,29 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         f.write("\n".join(lines).strip() + "\n")
 
 
+def burn_ass_subtitles(video_path, ass_path, output_path):
+    """Burn styled ASS subtitles into MP4 using relative paths for Windows safety."""
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    input_name = os.path.basename(video_path)
+    ass_name = os.path.basename(ass_path)
+    output_name = os.path.basename(output_path)
+    cmd = [
+        cc.FFMPEG, "-y", "-i", input_name,
+        "-vf", f"subtitles={ass_name}",
+        "-map", "0:v:0", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+        output_name,
+    ]
+    result = subprocess.run(
+        cmd, cwd=out_dir, capture_output=True, text=True,
+        encoding="utf-8", errors="ignore",
+    )
+    if result.returncode != 0 or not os.path.exists(output_path):
+        detail = (result.stderr or result.stdout or "unknown ffmpeg error")[-1200:]
+        raise SystemExit(f"ffmpeg ฝังซับไม่สำเร็จ: {detail}")
+
+
 def safe_name(name):
     cleaned = re.sub(r'[\\/:*?"<>|]+', "_", (name or "CAPCUT_Easy_CUT").strip())
     cleaned = re.sub(r"\s+", "_", cleaned)
@@ -177,7 +226,7 @@ def make_readme(summary):
 ไฟล์นี้ประมวลผลมาให้พร้อมต่อใน CapCut แล้ว
 
 ## ไฟล์สำคัญ
-- `CAPCUT_Easy_CUT_video.mp4` — คลิปรวมหลังตัดช่วงเงียบ
+- `CAPCUT_Easy_CUT_video.mp4` — คลิปรวมหลังตัดช่วงเงียบ พร้อมซับฝังในวิดีโอ
 - `subtitles.srt` — ซับคำ/วลีสั้นที่อ่านทันสำหรับ Import เข้า CapCut
 - `subtitles_styled.ass` — ซับแบบมีสไตล์: keyword ใหญ่ หนา สีเด่น / คำประกอบอยู่ซ้าย-ขวา
 - `subtitles.vtt` — ซับสำรองสำหรับโปรแกรมอื่น
@@ -210,9 +259,19 @@ def main():
     ap.add_argument("--brand", default="")
     ap.add_argument("--no-dead-air", action="store_true")
     ap.add_argument("--words", type=int, default=0, help="จำนวนคำต่อ 1 ซับ (0 = อัตโนมัติ)")
+    ap.add_argument("--quality", choices=("fast", "accurate", "max"), default="max")
+    ap.add_argument("--keyterms", default="", help="ชื่อคน/แบรนด์/ศัพท์เฉพาะ คั่นด้วย comma")
+    ap.add_argument("--llm-provider", default="")
+    ap.add_argument("--llm-key", default="")
+    ap.add_argument("--llm-model", default="")
+    ap.add_argument("--llm-base", default="")
     ap.add_argument("--cut-flubs", action="store_true",
                     help="ตัดคำพูดติดขัด/พูดผิดออก (เอ่อ อ่า, พูดซ้ำ)")
     args = ap.parse_args()
+
+    os.environ["EASYCUT_TRANSCRIBE_QUALITY"] = args.quality
+    if args.keyterms.strip():
+        os.environ["EASYCUT_KEYTERMS"] = args.keyterms.strip()
 
     clips_folder = os.path.abspath(args.clips)
     out_dir = os.path.abspath(args.out)
@@ -242,6 +301,22 @@ def main():
         original_total += dur
 
         transcript = cc.transcribe(clip, cache_json=os.path.join(work_dir, f"words_{i:02d}.json"))
+        # Optional second opinion from the configured LLM. It may only return
+        # conservative word replacements, so timestamps and spoken meaning stay intact.
+        if args.llm_provider and (args.llm_key or args.llm_provider == "local") and args.llm_model:
+            try:
+                texts = [s.get("text", "") for s in transcript.get("segments", [])]
+                reps = cc.llm_thai_corrections(
+                    texts, args.llm_provider, args.llm_key, args.llm_model, args.llm_base or None,
+                )
+                if reps:
+                    brand["corrections"].update(reps)
+                    shown = ", ".join(f"{k}→{v}" for k, v in list(reps.items())[:8])
+                    print(f"[THAI] ตรวจซ้ำและแก้คำ {len(reps)} คำ ({shown})", flush=True)
+                else:
+                    print("[THAI] AI ตรวจซ้ำแล้ว ไม่พบคำที่แก้ได้อย่างปลอดภัย", flush=True)
+            except Exception as e:
+                print(f"[THAI] AI ตรวจซ้ำไม่สำเร็จ จึงใช้ผล Whisper ต่อ ({str(e)[:160]})", flush=True)
         # ---- ตัดคำพูดติดขัด/พูดผิด (เอ่อ อ่า, พูดซ้ำ) ก่อนตัด dead air ----
         flub_cuts = []
         if args.cut_flubs:
@@ -304,15 +379,16 @@ def main():
             }
         )
 
+    clean_combined = os.path.join(out_dir, "CAPCUT_Easy_CUT_video_clean.mp4")
     combined = os.path.join(out_dir, "CAPCUT_Easy_CUT_video.mp4")
     print("รวมคลิปหลังตัดเป็นไฟล์เดียว...", flush=True)
     if len(per_clip) == 1:
-        shutil.copyfile(per_clip[0][0], combined)
+        shutil.copyfile(per_clip[0][0], clean_combined)
     else:
-        cc.concat_clips([p[0] for p in per_clip], combined)
+        cc.concat_clips([p[0] for p in per_clip], clean_combined)
 
-    total_dur = cc.ffprobe_dur(combined) or processed_total
-    out_w, out_h = cc.ffprobe_wh(combined)  # ความละเอียดจริงของ output -> ทำให้ซับ .ass สเกลถูกทั้งแนวตั้ง/แนวนอน
+    total_dur = cc.ffprobe_dur(clean_combined) or processed_total
+    out_w, out_h = cc.ffprobe_wh(clean_combined)  # ความละเอียดจริงของ output -> ทำให้ซับ .ass สเกลถูกทั้งแนวตั้ง/แนวนอน
     all_captions = []
     all_sentence_captions = []
     transcript_lines = []
@@ -332,9 +408,15 @@ def main():
             all_sentence_captions.append((start + offset, min(end + offset, total_dur), text))
         offset += clip_dur
 
+    all_captions = sanitize_captions(all_captions)
+    all_sentence_captions = sanitize_captions(all_sentence_captions)
     write_srt(all_captions, os.path.join(out_dir, "subtitles.srt"))
     write_vtt(all_captions, os.path.join(out_dir, "subtitles.vtt"))
-    write_ass(all_captions, os.path.join(out_dir, "subtitles_styled.ass"), out_w, out_h)
+    ass_path = os.path.join(out_dir, "subtitles_styled.ass")
+    write_ass(all_captions, ass_path, out_w, out_h)
+    print("ฝังซับไตเติ้ลลงวิดีโอ...", flush=True)
+    burn_ass_subtitles(clean_combined, ass_path, combined)
+    os.remove(clean_combined)
     write_srt(all_sentence_captions, os.path.join(out_dir, "subtitles_sentence.srt"))
     write_vtt(all_sentence_captions, os.path.join(out_dir, "subtitles_sentence.vtt"))
     with open(os.path.join(out_dir, "transcript.txt"), "w", encoding="utf-8") as f:

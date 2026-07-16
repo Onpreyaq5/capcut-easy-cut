@@ -12,6 +12,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
+const MAX_UPLOAD_BYTES = Math.max(1, Number(process.env.EASYCUT_MAX_UPLOAD_MB || 2048)) * 1024 * 1024;
 
 interface Parsed { videoPath?: string; project?: string }
 
@@ -19,18 +20,20 @@ function parse(req: NextRequest, dest: string): Promise<Parsed> {
   return new Promise((resolve, reject) => {
     const ct = req.headers.get('content-type') || '';
     if (!ct.includes('multipart/form-data')) return reject(new Error('ต้องส่ง multipart/form-data'));
-    const bb = Busboy({ headers: { 'content-type': ct } });
+    const bb = Busboy({ headers: { 'content-type': ct }, limits: { files: 1, fileSize: MAX_UPLOAD_BYTES, fields: 5, fieldSize: 2 * 1024 * 1024 } });
     const writes: Promise<void>[] = [];
     const out: Parsed = {};
+    let uploadError: Error | null = null;
     bb.on('field', (n, v) => { if (n === 'project') out.project = v; });
-    bb.on('file', (n, stream) => {
+    bb.on('file', (n, stream, info) => {
       if (n !== 'video') { stream.resume(); return; }
+      stream.once('limit', () => { uploadError = new Error(`ไฟล์ ${info.filename || ''} ใหญ่เกินกำหนด`); });
       out.videoPath = dest;
       const ws = createWriteStream(dest);
       writes.push(new Promise<void>((res, rej) => { ws.on('finish', () => res()); ws.on('error', rej); stream.on('error', rej); }));
       stream.pipe(ws);
     });
-    bb.on('close', () => { Promise.all(writes).then(() => resolve(out)).catch(reject); });
+    bb.on('close', () => { Promise.all(writes).then(() => uploadError ? reject(uploadError) : resolve(out)).catch(reject); });
     bb.on('error', reject);
     if (!req.body) return reject(new Error('ไม่มีข้อมูล'));
     Readable.fromWeb(req.body as Parameters<typeof Readable.fromWeb>[0]).pipe(bb);

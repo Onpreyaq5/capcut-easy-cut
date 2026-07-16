@@ -33,11 +33,14 @@ def ass_time(t):
 
 
 def build_ass(lines, style, W, H, karaoke, no_space):
-    fontname = (style.get("font") or "Leelawadee UI").strip()
-    fs = int(round(float(style.get("fontSizePct") or 6) / 100.0 * H))
-    yp = float(style.get("yPercent") if style.get("yPercent") is not None else 74)
+    # The web editor serializes this field as fontFamily. Keep the old `font`
+    # fallback so projects created by older clients still render correctly.
+    fontname = (style.get("fontFamily") or style.get("font") or "Kanit").strip()
+    fs = int(round(float(style.get("fontSizePct") or 5) / 100.0 * H))
+    yp = float(style.get("yPercent") if style.get("yPercent") is not None else 72)
     margin_v = int(max(10, (100.0 - yp) / 100.0 * H - fs * 0.5))
-    outline = round(float(style.get("strokeWidthPx") if style.get("strokeWidthPx") is not None else 10) / 1280.0 * H, 1)
+    outline = round(float(style.get("strokeWidthPx") if style.get("strokeWidthPx") is not None else 6) / 1280.0 * H, 1)
+    margin_h = max(24, int(W * 0.07))
     primary = hex_to_ass(style.get("highlightColor") or "#FFE400")  # สีคำที่ร้องถึงแล้ว (karaoke fill)
     secondary = hex_to_ass(style.get("color") or "#FFFFFF")          # สีคำที่ยังไม่ถึง
     base = hex_to_ass(style.get("color") or "#FFFFFF")               # ไม่คาราโอเกะ = สีเดียว
@@ -47,7 +50,7 @@ def build_ass(lines, style, W, H, karaoke, no_space):
     prim = primary if karaoke else base
     style_line = (
         f"Style: Main,{fontname},{fs},{prim},{secondary},&H00000000,&H64000000,"
-        f"-1,0,0,0,100,100,0,0,1,{outline},0,2,60,60,{margin_v},1"
+        f"-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_h},{margin_h},{margin_v},1"
     )
 
     events = []
@@ -63,17 +66,25 @@ def build_ass(lines, style, W, H, karaoke, no_space):
             parts = []
             for i, w in enumerate(words):
                 ws = float(w["start"])
-                we = float(words[i + 1]["start"]) if i + 1 < len(words) else en
+                we = max(ws + 0.01, float(w.get("end", ws + 0.01)))
                 dur_cs = max(1, int(round((we - ws) * 100)))
                 txt = (w.get("text") or "").strip().replace("{", "").replace("}", "")
                 parts.append(f"{{\\kf{dur_cs}}}{txt}")
-            text = sep.join(parts)
+                if i + 1 < len(words):
+                    gap_cs = max(0, int(round((float(words[i + 1]["start"]) - we) * 100)))
+                    # Assign silence to the separator instead of leaving the
+                    # previous word highlighted throughout the pause.
+                    if gap_cs:
+                        parts.append(f"{{\\k{gap_cs}}}{sep}")
+                    else:
+                        parts.append(sep)
+            text = "".join(parts)
         else:
             text = sep.join((w.get("text") or "").strip().replace("{", "").replace("}", "") for w in words)
         events.append(f"Dialogue: 0,{ass_time(st)},{ass_time(en)},Main,,0,0,0,,{text}")
 
     header = (
-        "[Script Info]\nScriptType: v4.00+\nWrapStyle: 2\nScaledBorderAndShadow: yes\n"
+        "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\nScaledBorderAndShadow: yes\n"
         f"PlayResX: {W}\nPlayResY: {H}\n\n"
         "[V4+ Styles]\n"
         "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,"

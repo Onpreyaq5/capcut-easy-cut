@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { Storyboard } from '@/lib/types';
+import { getSessionUser, rateLimit } from '@/lib/authStore';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -10,6 +11,9 @@ export const maxDuration = 60;
  * ถ้ามี key อวตาร (HeyGen/D-ID) จะแนบหมายเหตุการต่อยอด
  */
 export async function POST(req: NextRequest) {
+  const user = await getSessionUser(req);
+  if (!user) return NextResponse.json({ error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+  if (!rateLimit(`ai:${user.email}`, 30, 60_000)) return NextResponse.json({ error: 'เรียก AI ถี่เกินไป กรุณารอสักครู่' }, { status: 429 });
   try {
     const { storyboard, avatarProvider, avatarKey } = (await req.json()) as {
       storyboard: Storyboard;

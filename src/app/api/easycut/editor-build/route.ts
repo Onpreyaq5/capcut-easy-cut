@@ -7,12 +7,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { getSessionUser } from '@/lib/authStore';
 import { isCloud } from '@/lib/platform';
+import { capcutAccess } from '@/lib/access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
+const MAX_UPLOAD_BYTES = Math.max(1, Number(process.env.EASYCUT_MAX_UPLOAD_MB || 2048)) * 1024 * 1024;
 
 // CapCut เปิดค้าง = คลิปขึ้นแดง (ล็อกโฟลเดอร์) — ต้องปิดก่อนสร้าง
 function capcutIsRunning(): boolean {
@@ -31,18 +33,20 @@ function parse(req: NextRequest, videoDest: string): Promise<Parsed> {
   return new Promise((resolve, reject) => {
     const ct = req.headers.get('content-type') || '';
     if (!ct.includes('multipart/form-data')) return reject(new Error('ต้องส่ง multipart/form-data'));
-    const bb = Busboy({ headers: { 'content-type': ct } });
+    const bb = Busboy({ headers: { 'content-type': ct }, limits: { files: 1, fileSize: MAX_UPLOAD_BYTES, fields: 10, fieldSize: 2 * 1024 * 1024 } });
     const writes: Promise<void>[] = [];
     const out: Parsed = {};
+    let uploadError: Error | null = null;
     bb.on('field', (n, v) => { if (n === 'project') out.project = v; if (n === 'name') out.name = v; });
-    bb.on('file', (n, stream) => {
+    bb.on('file', (n, stream, info) => {
       if (n !== 'video') { stream.resume(); return; }
+      stream.once('limit', () => { uploadError = new Error(`ไฟล์ ${info.filename || ''} ใหญ่เกินกำหนด`); });
       out.videoPath = videoDest;
       const ws = createWriteStream(videoDest);
       writes.push(new Promise<void>((res, rej) => { ws.on('finish', () => res()); ws.on('error', rej); stream.on('error', rej); }));
       stream.pipe(ws);
     });
-    bb.on('close', () => { Promise.all(writes).then(() => resolve(out)).catch(reject); });
+    bb.on('close', () => { Promise.all(writes).then(() => uploadError ? reject(uploadError) : resolve(out)).catch(reject); });
     bb.on('error', reject);
     if (!req.body) return reject(new Error('ไม่มีข้อมูล'));
     Readable.fromWeb(req.body as Parameters<typeof Readable.fromWeb>[0]).pipe(bb);
@@ -50,8 +54,13 @@ function parse(req: NextRequest, videoDest: string): Promise<Parsed> {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await getSessionUser(req))) {
+  const user = await getSessionUser(req);
+  if (!user) {
     return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+  }
+  const access = capcutAccess(user);
+  if (!access.ok) {
+    return NextResponse.json({ ok: false, code: access.code, error: access.error }, { status: access.status });
   }
   // สร้างโปรเจกต์ CapCut ต้องมี CapCut ติดตั้ง — ทำได้เฉพาะแอปเวอร์ชันเครื่อง ไม่ใช่เซิร์ฟเวอร์คลาวด์
   if (isCloud()) {

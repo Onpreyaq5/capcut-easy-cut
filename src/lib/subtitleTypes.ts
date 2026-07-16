@@ -64,12 +64,12 @@ export interface SubStyle {
 
 export const DEFAULT_STYLE: SubStyle = {
   fontFamily: 'Kanit',
-  fontSizePct: 6,
-  yPercent: 74,
-  wordsPerLine: 3,
+  fontSizePct: 5,
+  yPercent: 72,
+  wordsPerLine: 0,
   color: '#FFFFFF',
   highlightColor: '#FFE400',
-  strokeWidthPx: 10,
+  strokeWidthPx: 6,
   continuous: false,
   noSpace: false,
   template: 'karaoke',
@@ -102,13 +102,25 @@ export function groupWords(words: SubWord[], wordsPerLine: number): SubLine[] {
     }
     return lines;
   }
-  // อัตโนมัติ: ตัดบรรทัดเมื่อช่องว่างเวลา > 0.5s หรือครบ 6 คำ
+  // อัตโนมัติ: ให้จังหวะพูด/ความยาววลีเป็นตัวตัด แทนจำนวนคำตายตัว
+  // เพื่อให้ภาษาไทยไม่เกิดบรรทัดยาวล้นจอหรือวลีสั้นโดดเดี่ยวเกินไป
+  const MAX_WORDS = 5;
+  const MAX_CHARS = 20;
+  const PAUSE_SEC = 0.4;
+  const endsPhrase = (text: string) => /[.!?…。！？ๆ]$/.test(text.trim());
   let cur: SubWord[] = [];
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const prev = words[i - 1];
     const gap = prev ? w.start - prev.end : 0;
-    if (cur.length && (gap > 0.5 || cur.length >= 6)) {
+    const nextChars = cur.reduce((sum, word) => sum + word.text.trim().length, 0)
+      + (cur.length ? 1 : 0) + w.text.trim().length;
+    if (cur.length && (
+      gap > PAUSE_SEC
+      || cur.length >= MAX_WORDS
+      || nextChars > MAX_CHARS
+      || (prev && endsPhrase(prev.text))
+    )) {
       lines.push({ id: nid(), words: cur });
       cur = [];
     }

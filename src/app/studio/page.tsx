@@ -32,7 +32,7 @@ export default function StudioPage() {
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h1 className="font-heading text-2xl font-bold">สตูดิโอทำคลิป</h1>
-          <p className="text-sm text-text-muted">สั่งงาน 1 → 2 → 3 แล้วส่งออกไป CapCut</p>
+          <p className="text-sm text-text-muted">สร้างเรื่อง บทขาย Storyboard และ Prompt Pack (Beta) แล้วส่งออกไปทำวิดีโอ/CapCut</p>
         </div>
         <Button
           variant="ghost"

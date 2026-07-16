@@ -23,7 +23,7 @@ export default function SettingsPage() {
     <div className="container-page max-w-3xl py-10">
       <div className="mb-8">
         <h1 className="font-heading text-3xl font-bold">ตั้งค่า</h1>
-        <p className="mt-1 text-text-secondary">ใส่ API key แล้วเลือกสมอง AI — ข้อมูลทั้งหมดเก็บในเครื่องคุณเท่านั้น (localStorage)</p>
+        <p className="mt-1 text-text-secondary">API key จัดเก็บในเบราว์เซอร์ของคุณ (localStorage) และส่งผ่านเซิร์ฟเวอร์ของแอปเฉพาะเมื่อเรียกผู้ให้บริการ AI — ไม่บันทึกลงฐานข้อมูล</p>
       </div>
 
       {/* เลือก provider */}
@@ -186,8 +186,8 @@ export default function SettingsPage() {
           <Field label="โหมดตัวละครพูด">
             <Select value={settings.avatarProvider} onChange={(e) => setSettings({ avatarProvider: e.target.value as any })}>
               <option value="prompt-only">Prompt-only — สร้าง prompt พร้อมผลิตไปเข้า Google Flow เอง (แนะนำ)</option>
-              <option value="heygen">HeyGen (ต้องมี API key + avatar)</option>
-              <option value="did">D-ID (ต้องมี API key)</option>
+              <option value="heygen">HeyGen — เตรียม Prompt/บทให้ (ยังไม่เรนเดอร์อัตโนมัติ)</option>
+              <option value="did">D-ID — เตรียม Prompt/บทให้ (ยังไม่เรนเดอร์อัตโนมัติ)</option>
             </Select>
           </Field>
           {settings.avatarProvider !== 'prompt-only' && (

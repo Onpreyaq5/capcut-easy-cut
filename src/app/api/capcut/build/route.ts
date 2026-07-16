@@ -3,6 +3,9 @@ import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { getSessionUser } from '@/lib/authStore';
+import { capcutAccess } from '@/lib/access';
+import { isCloud } from '@/lib/platform';
 
 // ทำงานในเครื่องเท่านั้น (เขียนไฟล์ draft ลงโฟลเดอร์ CapCut + เรียก Python/ffmpeg/whisper)
 export const runtime = 'nodejs';
@@ -12,9 +15,18 @@ const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
 // ไฟล์งาน (คลิปที่ตัดแล้ว) ต้องอยู่นอกโฟลเดอร์โปรเจกต์ที่ซิงก์ OneDrive —
 // ไม่งั้น OneDrive จะแปลงเป็นไฟล์ "cloud-only" (placeholder) ทีหลัง ทำให้ CapCut หาไฟล์ไม่เจอ ขึ้นสีแดง
 const JOBS_ROOT = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'CAPCUT_Easy_CUT', 'jobs');
+const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.m4v']);
+const MAX_FILE_BYTES = Math.max(1, Number(process.env.EASYCUT_MAX_UPLOAD_MB || 2048)) * 1024 * 1024;
 
 export async function POST(req: NextRequest) {
   try {
+    const user = await getSessionUser(req);
+    if (!user) return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+    const access = capcutAccess(user);
+    if (!access.ok) return NextResponse.json({ ok: false, code: access.code, error: access.error }, { status: access.status });
+    if (isCloud()) {
+      return NextResponse.json({ ok: false, code: 'cloud', error: 'สร้างโปรเจกต์ CapCut ได้เฉพาะแอปบน Windows' }, { status: 501 });
+    }
     const form = await req.formData();
     const rawName = ((form.get('name') as string) || 'CAPCUT_Easy_CUT').trim();
     const name = rawName.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_').slice(0, 60) || 'CAPCUT_Easy_CUT';
@@ -22,6 +34,17 @@ export async function POST(req: NextRequest) {
     const files = form.getAll('clips').filter((f): f is File => f instanceof File);
     if (!files.length) {
       return NextResponse.json({ ok: false, error: 'ไม่มีคลิปให้ประมวลผล' }, { status: 400 });
+    }
+    if (files.length > 100) {
+      return NextResponse.json({ ok: false, error: 'อัปโหลดได้ไม่เกิน 100 คลิปต่อหนึ่งงาน' }, { status: 413 });
+    }
+    for (const file of files) {
+      if (!VIDEO_EXT.has(path.extname(file.name).toLowerCase())) {
+        return NextResponse.json({ ok: false, error: `ไม่รองรับไฟล์ ${file.name}` }, { status: 415 });
+      }
+      if (file.size > MAX_FILE_BYTES) {
+        return NextResponse.json({ ok: false, error: `ไฟล์ ${file.name} ใหญ่เกินกำหนด` }, { status: 413 });
+      }
     }
 
     // ตรวจว่าเอนจินมีอยู่ (รันในเครื่องที่ติดตั้งไว้)

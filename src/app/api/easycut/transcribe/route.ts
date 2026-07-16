@@ -7,31 +7,37 @@ import path from 'node:path';
 import { getSessionUser } from '@/lib/authStore';
 import { groqEnabled, transcribeGroq, transcribeLocal } from '@/lib/transcribe';
 import { isCloud } from '@/lib/platform';
+import { processingAccess } from '@/lib/access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // ถอดเสียง whisper อาจนานสำหรับคลิปยาว
 
 const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
+const MAX_UPLOAD_BYTES = Math.max(1, Number(process.env.EASYCUT_MAX_UPLOAD_MB || 2048)) * 1024 * 1024;
 
 // รับวิดีโอ 1 ไฟล์ (สตรีมลงดิสก์) + ฟิลด์ข้อความ (keyterms) → คืน path + fields
 function saveUpload(req: NextRequest, dest: string): Promise<{ saved: boolean; fields: Record<string, string> }> {
   return new Promise((resolve, reject) => {
     const contentType = req.headers.get('content-type') || '';
     if (!contentType.includes('multipart/form-data')) return reject(new Error('ต้องส่ง multipart/form-data'));
-    const bb = Busboy({ headers: { 'content-type': contentType } });
+    const bb = Busboy({ headers: { 'content-type': contentType }, limits: { files: 1, fileSize: MAX_UPLOAD_BYTES, fields: 10, fieldSize: 64 * 1024 } });
     const writes: Promise<void>[] = [];
     const fields: Record<string, string> = {};
     let saved = false;
+    let uploadError: Error | null = null;
     bb.on('field', (name, val) => { fields[name] = val; });
-    bb.on('file', (name, stream) => {
+    bb.on('file', (name, stream, info) => {
       if (name !== 'clip' || saved) { stream.resume(); return; }
       saved = true;
+      stream.once('limit', () => { uploadError = new Error(`ไฟล์ ${info.filename || ''} ใหญ่เกินกำหนด`); });
       const ws = createWriteStream(dest);
       writes.push(new Promise<void>((res, rej) => { ws.on('finish', () => res()); ws.on('error', rej); stream.on('error', rej); }));
       stream.pipe(ws);
     });
-    bb.on('close', () => { Promise.all(writes).then(() => resolve({ saved, fields })).catch(reject); });
+    bb.on('close', () => {
+      Promise.all(writes).then(() => uploadError ? reject(uploadError) : resolve({ saved, fields })).catch(reject);
+    });
     bb.on('error', reject);
     if (!req.body) return reject(new Error('ไม่มีข้อมูล'));
     Readable.fromWeb(req.body as Parameters<typeof Readable.fromWeb>[0]).pipe(bb);
@@ -39,8 +45,13 @@ function saveUpload(req: NextRequest, dest: string): Promise<{ saved: boolean; f
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await getSessionUser(req))) {
+  const user = await getSessionUser(req);
+  if (!user) {
     return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+  }
+  const access = processingAccess(user);
+  if (!access.ok) {
+    return NextResponse.json({ ok: false, code: access.code, error: access.error }, { status: access.status });
   }
   // บนคลาวด์ไม่มี whisper ในเครื่อง — ถ้ายังไม่ตั้ง GROQ_API_KEY ให้บอกตรง ๆ ทันที
   // (ไม่ปล่อยให้ผู้ใช้อัปคลิปรอนานแล้วค่อยพังด้วย ModuleNotFoundError)

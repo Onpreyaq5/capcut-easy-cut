@@ -138,6 +138,8 @@ export function EasyCutTool() {
   }, []);
   const cloudOnly = caps?.localEngine === false;
   const [projectName, setProjectName] = useState('CAPCUT_Easy_CUT');
+  const [transcribeQuality, setTranscribeQuality] = useState<'fast' | 'accurate' | 'max'>('max');
+  const [keyterms, setKeyterms] = useState('');
   const [deadAir, setDeadAir] = useState(true);
   const [hookText, setHookText] = useState('');
   // จำนวนคำต่อ 1 ซับ (0 = อัตโนมัติ ให้ระบบจัดวลีเอง)
@@ -220,6 +222,8 @@ export function EasyCutTool() {
     const fd = new FormData();
     fd.append('mode', mode);
     fd.append('name', projectName || 'CAPCUT_Easy_CUT');
+    fd.append('quality', transcribeQuality);
+    if (keyterms.trim()) fd.append('keyterms', keyterms.trim());
     fd.append('deadAir', deadAir ? 'on' : 'off');
     fd.append('hook', hookText.trim());
     fd.append('words', String(wordsPerCap > 0 ? wordsPerCap : 0));
@@ -498,6 +502,37 @@ export function EasyCutTool() {
             <label className="mb-4 block">
               <span className="mb-1.5 block text-sm font-semibold text-text-secondary">ชื่อโปรเจกต์</span>
               <Input value={projectName} onChange={(e) => setProjectName(e.target.value)} />
+            </label>
+
+            <label className="mb-4 block">
+              <span className="mb-1.5 block text-sm font-semibold text-text-secondary">ความแม่นยำการถอดเสียง</span>
+              <select
+                value={transcribeQuality}
+                onChange={(e) => setTranscribeQuality(e.target.value as 'fast' | 'accurate' | 'max')}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-text-primary"
+              >
+                <option value="max">สูงสุด — Large v3 Turbo + denoise + beam search</option>
+                <option value="accurate">แม่น — Medium + ปรับเสียงพูด</option>
+                <option value="fast">เร็ว — Small</option>
+              </select>
+              <span className="mt-1 block text-xs leading-relaxed text-text-muted">
+                โหมดสูงสุดช้ากว่า แต่เหมาะกับภาษาไทย ชื่อเฉพาะ และเสียงที่มีดนตรี/เสียงรบกวน
+              </span>
+            </label>
+
+            <label className="mb-4 block">
+              <span className="mb-1.5 block text-sm font-semibold text-text-secondary">ชื่อคน / แบรนด์ / ศัพท์เฉพาะ</span>
+              <textarea
+                value={keyterms}
+                onChange={(e) => setKeyterms(e.target.value)}
+                rows={3}
+                maxLength={1000}
+                placeholder="เช่น สายยาง TOYOX, NANAK, ChatGPT, Easy CUT"
+                className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm text-text-primary outline-none focus:border-primary"
+              />
+              <span className="mt-1 block text-xs leading-relaxed text-text-muted">
+                คั่นด้วย comma หรือขึ้นบรรทัดใหม่ ระบบจะส่งเป็น prompt และ hotwords ให้ Whisper
+              </span>
             </label>
 
             <label className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-muted p-3">

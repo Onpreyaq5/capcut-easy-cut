@@ -4,6 +4,9 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
+import { getSessionUser } from '@/lib/authStore';
+import { processingAccess } from '@/lib/access';
+import { isCloud } from '@/lib/platform';
 
 export const runtime = 'nodejs';
 export const maxDuration = 900;
@@ -12,6 +15,8 @@ const TOOL_DIR = path.resolve(process.cwd(), 'tools', 'capcut-auto');
 // เก็บไฟล์งานนอกโฟลเดอร์โปรเจกต์ที่ซิงก์ OneDrive กัน ffmpeg/whisper ชนกับการซิงก์ระหว่างประมวลผล
 const JOBS_ROOT = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'CAPCUT_Easy_CUT', 'jobs');
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.m4v']);
+const MAX_UPLOAD_BYTES = Math.max(1, Number(process.env.EASYCUT_MAX_UPLOAD_MB || 2048)) * 1024 * 1024;
+const MAX_CLIPS = Math.max(1, Number(process.env.EASYCUT_MAX_CLIPS || 100));
 
 function safeName(input: string): string {
   return (
@@ -54,6 +59,11 @@ async function runPython(args: string[], cwd: string): Promise<{ code: number; o
 export async function POST(req: NextRequest) {
   let jobDir = '';
   try {
+    const user = await getSessionUser(req);
+    if (!user) return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+    const access = processingAccess(user);
+    if (!access.ok) return NextResponse.json({ ok: false, code: access.code, error: access.error }, { status: access.status });
+    if (isCloud()) return NextResponse.json({ ok: false, code: 'cloud', error: 'โหมดตัดอัตโนมัติใช้ได้เฉพาะแอปบน Windows' }, { status: 501 });
     const form = await req.formData();
     const rawName = safeName((form.get('name') as string) || 'CAPCUT_Easy_CUT');
     const noDeadAir = form.get('deadAir') === 'off';
@@ -64,6 +74,9 @@ export async function POST(req: NextRequest) {
 
     if (!files.length) {
       return NextResponse.json({ ok: false, error: 'ยังไม่มีไฟล์วิดีโอให้ประมวลผล' }, { status: 400 });
+    }
+    if (files.length > MAX_CLIPS || files.some((file) => file.size > MAX_UPLOAD_BYTES)) {
+      return NextResponse.json({ ok: false, error: 'จำนวนไฟล์หรือขนาดไฟล์เกินกำหนด' }, { status: 413 });
     }
 
     const script = path.join(TOOL_DIR, 'process_easycut.py');

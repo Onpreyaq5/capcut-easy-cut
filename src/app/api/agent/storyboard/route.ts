@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSessionUser, rateLimit } from '@/lib/authStore';
 import { callLLM, extractJson } from '@/lib/llm';
 import { AGENT3_SYSTEM, AGENT3_USER, fillTemplate } from '@/lib/prompts';
 import type { ProviderId, Storyboard, StoryboardInput, Scene } from '@/lib/types';
@@ -7,6 +8,9 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
+  const user = await getSessionUser(req);
+  if (!user) return NextResponse.json({ error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
+  if (!rateLimit(`ai:${user.email}`, 30, 60_000)) return NextResponse.json({ error: 'เรียก AI ถี่เกินไป กรุณารอสักครู่' }, { status: 429 });
   try {
     const body = await req.json();
     const { provider, model, apiKey, input } = body as {

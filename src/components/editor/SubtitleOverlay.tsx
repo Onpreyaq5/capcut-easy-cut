@@ -169,7 +169,6 @@ export function SubtitleOverlay({
             }}
           >
             {w.text}
-            {!style.noSpace && i < line.words.length - 1 ? ' ' : ''}
           </span>
         );
       })}

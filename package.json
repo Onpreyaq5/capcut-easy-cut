@@ -4,13 +4,13 @@
   "private": true,
   "description": "CAPCUT Easy CUT — ลากคลิปใส่เว็บ ตัด Dead air ทำซับไตเติ้ลอัตโนมัติ แล้วดาวน์โหลดไปใช้ต่อใน CapCut",
   "scripts": {
-    "predev": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\"",
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "prebuild": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\"",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",
@@ -21,7 +21,6 @@
     "busboy": "^1.6.0",
     "clsx": "2.1.1",
     "file-saver": "2.0.5",
-    "framer-motion": "11.5.6",
     "jszip": "3.10.1",
     "lucide-react": "0.451.0",
     "next": "^16.2.10",
@@ -44,7 +43,8 @@
     "eslint-config-next": "^16.2.10",
     "postcss": "^8.5.10",
     "tailwindcss": "3.4.13",
-    "typescript": "5.6.2"
+    "typescript": "5.6.2",
+    "vitest": "^2.1.9"
   },
   "overrides": {
     "next": {

@@ -4,9 +4,10 @@ import { Readable } from 'node:stream';
 import { createWriteStream, promises as fs } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { createJobDirs, startJob, type JobMode } from '@/lib/easycutJobs';
+import { createJobDirs, runningJobCount, startJob, type JobMode } from '@/lib/easycutJobs';
 import { getSessionUser } from '@/lib/authStore';
 import { isCloud } from '@/lib/platform';
+import { capcutAccess, processingAccess } from '@/lib/access';
 
 // เช็คว่ามี CapCut เปิดค้างอยู่ไหม (Windows) — ถ้าสร้างโปรเจกต์ขณะ CapCut เปิด คลิปจะขึ้นสีแดง Media Not Found
 function capcutIsRunning(): boolean {
@@ -29,6 +30,8 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.m4v']);
+const MAX_UPLOAD_BYTES = Math.max(1, Number(process.env.EASYCUT_MAX_UPLOAD_MB || 2048)) * 1024 * 1024;
+const MAX_CLIPS = Math.max(1, Number(process.env.EASYCUT_MAX_CLIPS || 100));
 
 function extOf(name: string): string {
   const i = name.lastIndexOf('.');
@@ -53,7 +56,10 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
       reject(new Error('ต้องส่งเป็น multipart/form-data'));
       return;
     }
-    const bb = Busboy({ headers: { 'content-type': contentType } });
+    const bb = Busboy({
+      headers: { 'content-type': contentType },
+      limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_CLIPS + 20, fields: 80, fieldSize: 2 * 1024 * 1024 },
+    });
     const fields: Record<string, string> = {};
     const writes: Promise<void>[] = [];
     let clipCount = 0;
@@ -82,6 +88,9 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
     });
 
     bb.on('file', (name, stream, info) => {
+      stream.once('limit', () => {
+        failed = new Error(`ไฟล์ ${info.filename || ''} ใหญ่เกิน ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`);
+      });
       // เพลง/SFX/โลโก้ hook (ไฟล์ประกอบ)
       if (name === 'bgm') {
         bgmPath = path.join(clipsDir, `_bgm${extOf(info.filename || '') || '.mp3'}`);
@@ -115,8 +124,12 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
         return;
       }
       const ext = extOf(info.filename || '') || '.mp4';
-      // โหมด zip รับเฉพาะสกุลวิดีโอ (โหมด capcut รับตามที่ส่งมา)
-      if (mode === 'zip' && !VIDEO_EXT.has(ext)) {
+      if (!VIDEO_EXT.has(ext)) {
+        stream.resume();
+        return;
+      }
+      if (clipCount >= MAX_CLIPS) {
+        failed = new Error(`อัปโหลดได้ไม่เกิน ${MAX_CLIPS} คลิปต่อหนึ่งงาน`);
         stream.resume();
         return;
       }
@@ -136,6 +149,8 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
     bb.on('error', (e) => {
       failed = e instanceof Error ? e : new Error(String(e));
     });
+    bb.on('filesLimit', () => { failed = new Error('จำนวนไฟล์เกินกำหนด'); });
+    bb.on('fieldsLimit', () => { failed = new Error('จำนวนช่องข้อมูลเกินกำหนด'); });
 
     bb.on('close', () => {
       if (failed) {
@@ -157,7 +172,8 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
 
 export async function POST(req: NextRequest) {
   // ต้องเข้าสู่ระบบก่อนใช้งาน (เก็บสถิติลูกค้า + กันยิง API ตรงโดยไม่ login)
-  if (!(await getSessionUser(req))) {
+  const user = await getSessionUser(req);
+  if (!user) {
     return NextResponse.json({ ok: false, error: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' }, { status: 401 });
   }
   // โหมดตัดออโต้เต็มรูปแบบใช้ whisper/CapCut ในเครื่อง — บนคลาวด์ยังไม่รองรับ
@@ -170,12 +186,30 @@ export async function POST(req: NextRequest) {
   }
   // อ่าน mode จาก query ก่อน (เพื่อรู้กติกาการกรองไฟล์ก่อนเริ่มสตรีม) — เผื่อไม่ได้ส่งก็ default zip
   const mode = ((req.nextUrl.searchParams.get('mode') as JobMode) || 'zip') as JobMode;
+  if (mode !== 'zip' && mode !== 'capcut') {
+    return NextResponse.json({ ok: false, error: 'โหมดงานไม่ถูกต้อง' }, { status: 400 });
+  }
+  const access = mode === 'capcut' ? capcutAccess(user) : processingAccess(user);
+  if (!access.ok) {
+    return NextResponse.json({ ok: false, code: access.code, error: access.error }, { status: access.status });
+  }
+  const concurrentLimit = access.quota.plan === 'studio' ? 4 : access.quota.plan === 'pro' ? 2 : 1;
+  if (runningJobCount(user.email) >= concurrentLimit) {
+    return NextResponse.json(
+      { ok: false, code: 'busy', error: `แพ็กเกจ ${access.quota.limit.label} ทำงานพร้อมกันได้สูงสุด ${concurrentLimit} งาน กรุณารอให้งานเดิมเสร็จก่อน` },
+      { status: 429 },
+    );
+  }
   const dirs = await createJobDirs(mode);
   try {
     const { fields, clipCount, bgmPath, whooshPath, introPath, dingPaths, hookLogoPaths } =
       await streamMultipart(req, mode, dirs.clipsDir);
     // mode ในฟอร์มมีสิทธิ์เหนือกว่า query (แต่การกรองไฟล์ทำตาม query ไปแล้ว)
     const finalMode = ((fields.mode as JobMode) || mode) as JobMode;
+    if (finalMode !== mode) {
+      await fs.rm(dirs.jobDir, { recursive: true, force: true }).catch(() => undefined);
+      return NextResponse.json({ ok: false, error: 'โหมดในคำขอไม่ตรงกัน กรุณาลองใหม่' }, { status: 400 });
+    }
 
     if (!clipCount) {
       await fs.rm(dirs.jobDir, { recursive: true, force: true }).catch(() => undefined);
@@ -199,6 +233,7 @@ export async function POST(req: NextRequest) {
     }
 
     const jobId = await startJob({
+      ownerEmail: user.email,
       mode: finalMode,
       name: fields.name || 'CAPCUT_Easy_CUT',
       id: dirs.id,
@@ -210,6 +245,8 @@ export async function POST(req: NextRequest) {
       hook: (fields.hook || '').trim(),
       script: fields.script || '',
       words: parseInt(fields.words || '0', 10) || 0,
+      quality: fields.quality === 'fast' || fields.quality === 'accurate' ? fields.quality : 'max',
+      keyterms: (fields.keyterms || '').trim().slice(0, 1000),
       cutFlubs: fields.cutFlubs === 'on',
       bgm: bgmPath,
       removeVocals: fields.removeVocals === 'on',

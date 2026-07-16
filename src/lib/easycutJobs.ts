@@ -7,12 +7,14 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
+import { addUsage } from './authStore';
 
 export type JobMode = 'zip' | 'capcut';
 export type JobStatus = 'running' | 'done' | 'error' | 'canceled';
 
 export interface Job {
   id: string;
+  ownerEmail: string;
   mode: JobMode;
   status: JobStatus;
   progress: number; // 0-100 (ประมาณการ)
@@ -26,6 +28,7 @@ export interface Job {
   zipPath?: string;
   child?: ChildProcessWithoutNullStreams;
   createdAt: number;
+  updatedAt: number;
   // สถานะภายในสำหรับคำนวณ %
   totalClips: number;
   curClip: number;
@@ -42,18 +45,78 @@ const JOB_TTL_MS = 60 * 60 * 1000; // เก็บงานเก่าไว้
 const g = globalThis as unknown as { __easycutJobs?: Map<string, Job> };
 const jobs: Map<string, Job> = g.__easycutJobs ?? (g.__easycutJobs = new Map<string, Job>());
 
-function sweepOld() {
+type PersistedJob = Omit<Job, 'child'>;
+
+function metadataPath(jobDir: string): string {
+  return path.join(jobDir, 'job.json');
+}
+
+async function persistJob(j: Job): Promise<void> {
+  j.updatedAt = Date.now();
+  const data: Partial<Job> = { ...j };
+  delete data.child;
+  const file = metadataPath(j.jobDir);
+  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
+  await fs.rename(tmp, file);
+}
+
+const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function queuePersist(j: Job): void {
+  if (persistTimers.has(j.id)) return;
+  persistTimers.set(j.id, setTimeout(() => {
+    persistTimers.delete(j.id);
+    persistJob(j).catch(() => undefined);
+  }, 500));
+}
+
+async function sweepOld() {
   const now = Date.now();
   for (const [id, j] of jobs) {
     if (j.status !== 'running' && now - j.createdAt > JOB_TTL_MS) {
-      fs.rm(j.jobDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(j.jobDir, { recursive: true, force: true }).catch(() => undefined);
       jobs.delete(id);
     }
   }
+  // กวาดงานที่เหลือบนดิสก์จาก process ก่อนหน้า โดยไม่แตะงาน running ของ process ปัจจุบัน
+  await fs.mkdir(JOBS_ROOT, { recursive: true });
+  const entries = await fs.readdir(JOBS_ROOT, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^(zip|capcut)_\d+_\d+$/.test(entry.name)) continue;
+    const dir = path.join(JOBS_ROOT, entry.name);
+    if ([...jobs.values()].some((job) => job.jobDir === dir && job.status === 'running')) continue;
+    const stat = await fs.stat(dir).catch(() => null);
+    if (stat && now - stat.mtimeMs > JOB_TTL_MS) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
-export function getJob(id: string): Job | undefined {
-  return jobs.get(id);
+export async function getJob(id: string): Promise<Job | undefined> {
+  const inMemory = jobs.get(id);
+  if (inMemory) return inMemory;
+  if (!/^\d+_\d+$/.test(id)) return undefined;
+  for (const mode of ['zip', 'capcut'] as const) {
+    const jobDir = path.join(JOBS_ROOT, `${mode}_${id}`);
+    try {
+      const raw = JSON.parse(await fs.readFile(metadataPath(jobDir), 'utf8')) as PersistedJob;
+      const job: Job = { ...raw, jobDir, child: undefined };
+      if (job.status === 'running') {
+        job.status = 'error';
+        job.error = 'งานหยุดเพราะแอปถูกปิดหรือรีสตาร์ต กรุณาเริ่มงานใหม่';
+        job.phase = 'งานถูกขัดจังหวะ';
+        await persistJob(job).catch(() => undefined);
+      }
+      jobs.set(id, job);
+      return job;
+    } catch {
+      // ลองอีกโหมด
+    }
+  }
+  return undefined;
+}
+
+export function runningJobCount(ownerEmail: string): number {
+  const email = ownerEmail.trim().toLowerCase();
+  return [...jobs.values()].filter((job) => job.ownerEmail === email && job.status === 'running').length;
 }
 
 /** สรุปสถานะแบบย่อสำหรับส่งให้ client (ไม่รวม child/handle) */
@@ -180,7 +243,7 @@ function buildZipToDisk(outDir: string, zipPath: string): Promise<void> {
 
 /** สร้างโฟลเดอร์งานใหม่ (jobDir/clips, jobDir/output) เพื่อให้ route สตรีมไฟล์ลง clipsDir เอง */
 export async function createJobDirs(mode: JobMode): Promise<{ id: string; jobDir: string; clipsDir: string; outDir: string }> {
-  sweepOld();
+  await sweepOld();
   const id = `${Date.now()}_${Math.floor(performance.now())}`;
   const jobDir = path.join(JOBS_ROOT, `${mode}_${id}`);
   const clipsDir = path.join(jobDir, 'clips');
@@ -191,6 +254,7 @@ export async function createJobDirs(mode: JobMode): Promise<{ id: string; jobDir
 }
 
 export interface StartOptions {
+  ownerEmail: string;
   mode: JobMode;
   name: string;
   id: string;
@@ -202,6 +266,8 @@ export interface StartOptions {
   hook?: string; // capcut
   script?: string; // capcut
   words?: number; // จำนวนคำต่อ 1 ซับ (0/undefined = อัตโนมัติ)
+  quality?: 'fast' | 'accurate' | 'max';
+  keyterms?: string;
   cutFlubs?: boolean; // ตัดคำพูดติดขัด/พูดผิด (เอ่อ อ่า, พูดซ้ำ, retake/blooper)
   bgm?: string; // path ไฟล์เพลงประกอบ (capcut)
   removeVocals?: boolean; // ตัดเสียงร้องออกจากเพลง BGM
@@ -236,6 +302,13 @@ export async function startJob(opts: StartOptions): Promise<string> {
     if (opts.deadAir === false) args.push('--no-dead-air');
     if (words) args.push('--words', words);
     if (opts.cutFlubs) args.push('--cut-flubs');
+    args.push('--quality', opts.quality || 'max');
+    if (opts.keyterms) args.push('--keyterms', opts.keyterms);
+    const l = opts.llm;
+    if (l?.provider) args.push('--llm-provider', l.provider);
+    if (l?.key) args.push('--llm-key', l.key);
+    if (l?.model) args.push('--llm-model', l.model);
+    if (l?.base) args.push('--llm-base', l.base);
   } else {
     script = path.join(TOOL_DIR, 'build_capcut.py');
     args = ['--clips', clipsDir, '--name', name, '--brand', path.join(TOOL_DIR, 'brand.json')];
@@ -274,6 +347,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
 
   const job: Job = {
     id,
+    ownerEmail: opts.ownerEmail.trim().toLowerCase(),
     mode: opts.mode,
     status: 'running',
     progress: 1,
@@ -283,14 +357,31 @@ export async function startJob(opts: StartOptions): Promise<string> {
     jobDir,
     outDir,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     totalClips: Math.max(1, opts.clipCount),
     curClip: 0,
   };
   jobs.set(id, job);
+  await persistJob(job);
 
   const child = spawn('python', ['-u', ...args], {
     cwd: TOOL_DIR,
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: 'utf-8',
+      // Do not let a server started outside the desktop launcher silently fall
+      // back to large-v3; it exceeds the memory budget of many Windows laptops.
+      EASYCUT_TRANSCRIBE_QUALITY: opts.quality || 'max',
+      EASYCUT_KEYTERMS: opts.keyterms || '',
+      EASYCUT_WHISPER_MODEL:
+        process.env.EASYCUT_WHISPER_MODEL ||
+        ((opts.quality || 'max') === 'fast'
+          ? 'small'
+          : (opts.quality || 'max') === 'accurate'
+            ? 'medium'
+            : 'large-v3-turbo'),
+      EASYCUT_WHISPER_DEVICE: process.env.EASYCUT_WHISPER_DEVICE || 'cpu',
+    },
   }) as ChildProcessWithoutNullStreams;
   job.child = child;
 
@@ -300,6 +391,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
     const lines = buf.split(/\r?\n/);
     buf = lines.pop() || '';
     for (const line of lines) ingestLine(job, line);
+    queuePersist(job);
   };
   child.stdout.on('data', onData);
   child.stderr.on('data', onData);
@@ -307,6 +399,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
   child.on('error', (e) => {
     job.status = 'error';
     job.error = String(e);
+    persistJob(job).catch(() => undefined);
   });
 
   child.on('close', async (code) => {
@@ -319,6 +412,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
     if (code !== 0) {
       job.status = 'error';
       job.error = job.error || 'ประมวลผลไม่สำเร็จ';
+      await persistJob(job).catch(() => undefined);
       return;
     }
     if (job.mode === 'zip') {
@@ -332,20 +426,23 @@ export async function startJob(opts: StartOptions): Promise<string> {
       } catch (e) {
         job.status = 'error';
         job.error = 'สร้างไฟล์ ZIP ไม่สำเร็จ: ' + String(e);
+        await persistJob(job).catch(() => undefined);
         return;
       }
     }
     job.phase = 'เสร็จสมบูรณ์';
     job.progress = 100;
     job.status = 'done';
+    await persistJob(job).catch(() => undefined);
+    await recordUsage(job).catch(() => undefined);
   });
 
   return id;
 }
 
 /** ยกเลิกงาน: ฆ่า process ลูก (แก้ปัญหางานค้างกินเครื่อง) */
-export function cancelJob(id: string): boolean {
-  const j = jobs.get(id);
+export async function cancelJob(id: string): Promise<boolean> {
+  const j = await getJob(id);
   if (!j) return false;
   if (j.status === 'running') {
     j.status = 'canceled';
@@ -360,13 +457,21 @@ export function cancelJob(id: string): boolean {
       }
     }
   }
+  await persistJob(j).catch(() => undefined);
   return true;
 }
 
 /** สตรีม ZIP ออกจากดิสก์ (ไม่โหลดเข้า RAM) พร้อม cleanup หลังส่งเสร็จ */
-export function openResultStream(id: string): { stream: ReturnType<typeof createReadStream>; name: string } | null {
-  const j = jobs.get(id);
+export function openResultStream(j: Job): { stream: ReturnType<typeof createReadStream>; name: string } | null {
   if (!j || !j.zipPath) return null;
   const stream = createReadStream(j.zipPath);
   return { stream, name: j.resultName || `${j.name}.zip` };
+}
+
+async function recordUsage(job: Job): Promise<void> {
+  if (job.mode !== 'zip') return;
+  const summaryPath = path.join(job.outDir, 'processing_summary.json');
+  const summary = JSON.parse(await fs.readFile(summaryPath, 'utf8')) as { processed_duration_sec?: number };
+  const seconds = Number(summary.processed_duration_sec || 0);
+  if (Number.isFinite(seconds) && seconds > 0) await addUsage(job.ownerEmail, seconds);
 }

@@ -72,7 +72,7 @@ export function StepStoryboard({ onBack, onNext }: { onBack: () => void; onNext:
       <Card className="p-6">
         <div className="mb-4 flex items-center gap-2">
           <span className="grid h-8 w-8 place-items-center rounded-md bg-ai-soft text-ai text-sm font-bold">3</span>
-          <h2 className="font-heading text-lg font-bold">Storyboard + ตัวละครพูด</h2>
+          <h2 className="font-heading text-lg font-bold">Storyboard + Prompt Pack ตัวละคร (Beta)</h2>
         </div>
         <div className="space-y-4">
           <Field label="สไตล์ภาพ">
@@ -228,10 +228,10 @@ export function StepStoryboard({ onBack, onNext }: { onBack: () => void; onNext:
               <h3 className="font-heading text-lg font-bold">ตัวละคร AI ยืนพูดตามสคริปต์</h3>
             </div>
             <p className="mb-4 text-sm text-text-secondary">
-              ด้านบนคือ <b>storyboard (พรีวิว)</b> แล้ว — กดปุ่มนี้เพื่อให้เอเจนต์ <b>สร้างชุด prompt ตัวละครพูดพร้อมผลิตจริง</b> (ล็อกหน้าตาตัวละครให้เหมือนกันทุกช็อต) เอาไปวางใน Google Flow ได้เลย
+              ด้านบนคือ <b>storyboard (พรีวิว)</b> แล้ว — ปุ่มนี้สร้าง <b>ชุด prompt สำหรับนำไปผลิตต่อ</b> และช่วยล็อกลักษณะตัวละครให้สม่ำเสมอ ระบบยังไม่เรนเดอร์วิดีโออวตารให้อัตโนมัติ
             </p>
             <Button variant="ai" size="lg" loading={charLoading} onClick={makeCharacter}>
-              <Wand2 className="h-5 w-5" /> สร้างตัวละครพูด (สั่งเลย)
+              <Wand2 className="h-5 w-5" /> สร้าง Prompt Pack
             </Button>
 
             {charPkg && (

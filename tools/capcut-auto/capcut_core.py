@@ -423,6 +423,19 @@ def tighten_clip(src, keeps, out):
         raise SystemExit(f"ffmpeg tighten failed for {src}")
 
 
+def tighten_audio(src, keeps, out):
+    """เหมือน tighten_clip แต่สำหรับไฟล์เสียงล้วน (ไม่มีวิดีโอ) — ตัดช่วงที่ไม่เก็บออกแล้วต่อกัน
+    เอาไว้ใช้กับโหมด "ทำความสะอาดไฟล์เสียง" (ไม่มี -c:v เลย)"""
+    parts = []
+    for i, (ks, ke) in enumerate(keeps):
+        parts.append(f"[0:a]atrim={ks:.3f}:{ke:.3f},asetpts=PTS-STARTPTS[a{i}];")
+    concat_in = "".join(f"[a{i}]" for i in range(len(keeps)))
+    fc = "".join(parts) + f"{concat_in}concat=n={len(keeps)}:v=0:a=1[a]"
+    run_filter(["-i", src], fc, ["-map", "[a]", "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "48000", out])
+    if not os.path.exists(out):
+        raise SystemExit(f"ffmpeg tighten_audio failed for {src}")
+
+
 def make_timemap(keeps):
     spans, acc = [], 0.0
     for ks, ke in keeps:

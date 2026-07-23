@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 const links = [
   { href: '/', label: 'หน้าแรก' },
   { href: '/auto', label: 'ตัดออโต้' },
+  { href: '/audio', label: 'ทำความสะอาดเสียง' },
   { href: '/editor', label: 'ตัวแก้ซับ' },
   { href: '/pricing', label: 'แพ็กเกจ' },
 ];

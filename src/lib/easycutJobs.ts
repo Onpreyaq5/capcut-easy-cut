@@ -9,7 +9,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import { addUsage } from './authStore';
 
-export type JobMode = 'zip' | 'capcut';
+export type JobMode = 'zip' | 'capcut' | 'audio';
 export type JobStatus = 'running' | 'done' | 'error' | 'canceled';
 
 export interface Job {
@@ -301,7 +301,20 @@ export async function startJob(opts: StartOptions): Promise<string> {
   let script: string;
   let args: string[];
   const words = opts.words && opts.words > 0 ? String(opts.words) : '';
-  if (opts.mode === 'zip') {
+  if (opts.mode === 'audio') {
+    script = path.join(TOOL_DIR, 'clean_audio.py');
+    args = [script, '--clips', clipsDir, '--out', outDir, '--name', name, '--brand', path.join(TOOL_DIR, 'brand.json')];
+    if (opts.deadAir === false) args.push('--no-dead-air');
+    if (opts.cutFlubs) args.push('--cut-flubs');
+    if (opts.compareModels) args.push('--compare-models');
+    args.push('--quality', opts.quality || 'max');
+    if (opts.keyterms) args.push('--keyterms', opts.keyterms);
+    const l = opts.llm;
+    if (l?.provider) args.push('--llm-provider', l.provider);
+    if (l?.key) args.push('--llm-key', l.key);
+    if (l?.model) args.push('--llm-model', l.model);
+    if (l?.base) args.push('--llm-base', l.base);
+  } else if (opts.mode === 'zip') {
     script = path.join(TOOL_DIR, 'process_easycut.py');
     args = [script, '--clips', clipsDir, '--out', outDir, '--name', name, '--brand', path.join(TOOL_DIR, 'brand.json')];
     if (opts.deadAir === false) args.push('--no-dead-air');
@@ -422,7 +435,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
       await persistJob(job).catch(() => undefined);
       return;
     }
-    if (job.mode === 'zip') {
+    if (job.mode === 'zip' || job.mode === 'audio') {
       try {
         job.phase = 'กำลังบีบอัดแพ็กเกจ';
         job.progress = Math.max(job.progress, 92);
@@ -476,7 +489,7 @@ export function openResultStream(j: Job): { stream: ReturnType<typeof createRead
 }
 
 async function recordUsage(job: Job): Promise<void> {
-  if (job.mode !== 'zip') return;
+  if (job.mode !== 'zip' && job.mode !== 'audio') return;
   const summaryPath = path.join(job.outDir, 'processing_summary.json');
   const summary = JSON.parse(await fs.readFile(summaryPath, 'utf8')) as { processed_duration_sec?: number };
   const seconds = Number(summary.processed_duration_sec || 0);

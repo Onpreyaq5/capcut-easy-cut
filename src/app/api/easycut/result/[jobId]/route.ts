@@ -21,11 +21,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
 
   // สตรีมจากดิสก์ตรง ๆ (ไม่โหลด ZIP ทั้งก้อนเข้า RAM)
   const webStream = Readable.toWeb(opened.stream) as unknown as ReadableStream;
+  // ชื่อไฟล์อาจเป็นภาษาไทย (ผู้ใช้ตั้งชื่อโปรเจกต์เอง) — header ต้องเป็น ASCII เท่านั้น (ByteString)
+  // ไม่งั้น Response() จะ throw ("Cannot convert argument to a ByteString") ทำให้ดาวน์โหลดล้มเหลวทั้งก้อน
+  // จึงส่งชื่อ ASCII สำรองคู่กับ filename* (RFC 5987) ที่เข้ารหัส UTF-8 ให้เบราว์เซอร์ใช้ชื่อจริงได้
+  const asciiFallback = opened.name.replace(/[^\x20-\x7E]/g, '_') || 'download.zip';
   return new Response(webStream, {
     status: 200,
     headers: {
       'Content-Type': 'application/zip',
-      'Content-Disposition': `attachment; filename="${opened.name}"`,
+      'Content-Disposition': `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
       'Cache-Control': 'no-store',
     },
   });

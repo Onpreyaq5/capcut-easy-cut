@@ -30,6 +30,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.m4v']);
+const AUDIO_EXT = new Set(['.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.wma']);
 const MAX_UPLOAD_BYTES = Math.max(1, Number(process.env.EASYCUT_MAX_UPLOAD_MB || 2048)) * 1024 * 1024;
 const MAX_CLIPS = Math.max(1, Number(process.env.EASYCUT_MAX_CLIPS || 100));
 
@@ -123,13 +124,14 @@ function streamMultipart(req: NextRequest, mode: JobMode, clipsDir: string): Pro
         stream.resume(); // ทิ้ง field ไฟล์ที่ไม่เกี่ยว
         return;
       }
-      const ext = extOf(info.filename || '') || '.mp4';
-      if (!VIDEO_EXT.has(ext)) {
+      const allowedExt = mode === 'audio' ? AUDIO_EXT : VIDEO_EXT;
+      const ext = extOf(info.filename || '') || (mode === 'audio' ? '.wav' : '.mp4');
+      if (!allowedExt.has(ext)) {
         stream.resume();
         return;
       }
       if (clipCount >= MAX_CLIPS) {
-        failed = new Error(`อัปโหลดได้ไม่เกิน ${MAX_CLIPS} คลิปต่อหนึ่งงาน`);
+        failed = new Error(`อัปโหลดได้ไม่เกิน ${MAX_CLIPS} ไฟล์ต่อหนึ่งงาน`);
         stream.resume();
         return;
       }
@@ -186,7 +188,7 @@ export async function POST(req: NextRequest) {
   }
   // อ่าน mode จาก query ก่อน (เพื่อรู้กติกาการกรองไฟล์ก่อนเริ่มสตรีม) — เผื่อไม่ได้ส่งก็ default zip
   const mode = ((req.nextUrl.searchParams.get('mode') as JobMode) || 'zip') as JobMode;
-  if (mode !== 'zip' && mode !== 'capcut') {
+  if (mode !== 'zip' && mode !== 'capcut' && mode !== 'audio') {
     return NextResponse.json({ ok: false, error: 'โหมดงานไม่ถูกต้อง' }, { status: 400 });
   }
   const access = mode === 'capcut' ? capcutAccess(user) : processingAccess(user);
@@ -213,7 +215,10 @@ export async function POST(req: NextRequest) {
 
     if (!clipCount) {
       await fs.rm(dirs.jobDir, { recursive: true, force: true }).catch(() => undefined);
-      return NextResponse.json({ ok: false, error: 'ยังไม่มีไฟล์วิดีโอให้ประมวลผล' }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: finalMode === 'audio' ? 'ยังไม่มีไฟล์เสียงให้ประมวลผล' : 'ยังไม่มีไฟล์วิดีโอให้ประมวลผล' },
+        { status: 400 },
+      );
     }
 
     // โหมดสร้างโปรเจกต์ CapCut: ต้องปิด CapCut ก่อน ไม่งั้นคลิปขึ้นสีแดง Media Not Found

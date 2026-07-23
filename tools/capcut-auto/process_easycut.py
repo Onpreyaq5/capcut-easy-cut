@@ -267,6 +267,8 @@ def main():
     ap.add_argument("--llm-base", default="")
     ap.add_argument("--cut-flubs", action="store_true",
                     help="ตัดคำพูดติดขัด/พูดผิดออก (เอ่อ อ่า, พูดซ้ำ)")
+    ap.add_argument("--compare-models", action="store_true",
+                    help="ถอดเสียงซ้ำด้วยโมเดลคนละตัว แล้วให้ AI เทียบผลเพื่อความแม่นยำสูงสุด (ช้าลง ~2 เท่า ต้องตั้ง AI ด้วย)")
     args = ap.parse_args()
 
     os.environ["EASYCUT_TRANSCRIBE_QUALITY"] = args.quality
@@ -317,6 +319,28 @@ def main():
                     print("[THAI] AI ตรวจซ้ำแล้ว ไม่พบคำที่แก้ได้อย่างปลอดภัย", flush=True)
             except Exception as e:
                 print(f"[THAI] AI ตรวจซ้ำไม่สำเร็จ จึงใช้ผล Whisper ต่อ ({str(e)[:160]})", flush=True)
+        # ---- เทียบผลถอดเสียง 2 โมเดล (คนละสายพันธุ์) เพื่อความแม่นยำสูงสุด (ไม่บังคับ, ต้องมี AI) ----
+        if args.compare_models and args.llm_provider and (args.llm_key or args.llm_provider == "local") and args.llm_model:
+            secondary_model = cc._SECONDARY_MODEL_FOR.get(cc._primary_model_name())
+            if not secondary_model:
+                print("[RECONCILE] โปรไฟล์ปัจจุบันไม่มีโมเดลรองให้เทียบ (ข้าม)", flush=True)
+            else:
+                try:
+                    print(f"[RECONCILE] ถอดเสียงรอบ 2 ด้วยโมเดล {secondary_model} เพื่อเทียบผล...", flush=True)
+                    secondary_segs = cc.transcribe_secondary(clip, secondary_model)
+                    reps2 = cc.reconcile_word_corrections(
+                        transcript["segments"], secondary_segs,
+                        args.llm_provider, args.llm_key, args.llm_model, args.llm_base or None,
+                        keyterms=args.keyterms,
+                    )
+                    if reps2:
+                        brand["corrections"].update(reps2)
+                        shown = ", ".join(f"{k}→{v}" for k, v in list(reps2.items())[:8])
+                        print(f"[RECONCILE] เทียบ 2 โมเดลแล้ว แก้เพิ่ม {len(reps2)} คำ ({shown})", flush=True)
+                    else:
+                        print("[RECONCILE] เทียบ 2 โมเดลแล้ว ไม่พบคำที่ต้องแก้เพิ่ม", flush=True)
+                except Exception as e:
+                    print(f"[RECONCILE] เทียบ 2 โมเดลไม่สำเร็จ (ข้าม): {str(e)[:200]}", flush=True)
         # ---- ตัดคำพูดติดขัด/พูดผิด (เอ่อ อ่า, พูดซ้ำ) ก่อนตัด dead air ----
         flub_cuts = []
         if args.cut_flubs:

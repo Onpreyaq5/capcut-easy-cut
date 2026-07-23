@@ -30,6 +30,9 @@ export interface Settings {
   /** AI เฉพาะงานตรวจแก้ภาษาไทยในซับ (เจ้าฟรี: groq/cerebras/openrouter) — เว้นว่าง = ใช้ AI จากหน้าตั้งค่า */
   thaiCheckProvider: '' | 'groq' | 'cerebras' | 'openrouter';
   thaiCheckKey: string;
+  /** เทียบผลถอดเสียง 2 โมเดล (คนละสายพันธุ์) ให้ AI เลือกคำที่มีหลักฐานร่วมกัน — แม่นขึ้น แต่ช้าลง ~2 เท่า
+      ต้องเปิด thaiCheckProvider ไว้ด้วย เพราะการเทียบต้องใช้ AI ตัดสิน */
+  compareModels: boolean;
   /** Base URL ของ LLM ในเครื่อง (Ollama/LM Studio, OpenAI-compatible) */
   localBaseUrl: string;
   /** ค่าเริ่มต้นแบรนด์ */

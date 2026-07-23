@@ -1141,6 +1141,178 @@ def _is_safe_correction(k, v):
 
 
 # ============================================================
+#  เทียบผลถอดเสียง 2 โมเดล (คนละสายพันธุ์การเทรน) — แม่นกว่าถามความเห็นโมเดลเดียว
+#  เพราะจุดที่โมเดลหนึ่งได้ยินผิด มักไม่ใช่จุดเดียวกับอีกโมเดล ให้ AI ช่วยเทียบแล้วเลือกที่ตรงกัน
+# ============================================================
+
+_SECONDARY_MODEL_FOR = {
+    "large-v3-turbo": "medium",
+    "large-v3": "medium",
+    "large-v2": "medium",
+    "medium": "small",
+    "small": None,
+}
+
+
+def _primary_model_name():
+    """ชื่อโมเดลหลักที่ใช้ถอดเสียงรอบแรก (env หรือ default ตาม profile) — ใช้เลือกโมเดลรองมาเทียบ"""
+    profile = _whisper_profile()
+    default_model = "small" if profile == "fast" else ("large-v3-turbo" if profile == "max" else "medium")
+    requested = os.environ.get("EASYCUT_WHISPER_MODEL", default_model).strip() or default_model
+    return requested.split(",")[0].strip()
+
+
+def transcribe_secondary(path, model_size):
+    """ถอดเสียงรอบที่ 2 ด้วยโมเดลคนละตัวจากรอบหลัก ไว้เป็นหลักฐานอ้างอิงให้ AI เทียบ
+    ใช้แค่ระดับประโยค (ไม่ต้องมี word timestamps) โหลดโมเดลแยกไม่แตะ _MODEL หลัก
+    แล้วปล่อยหน่วยความจำคืนทันทีหลังใช้ (คนละช่วงเวลากับรอบหลัก กันหน่วยความจำไม่พอ)"""
+    from faster_whisper import WhisperModel
+    audio_path, cleanup = _prepare_whisper_audio(path)
+    device = os.environ.get("EASYCUT_WHISPER_DEVICE", "auto").strip().lower() or "auto"
+    tries = ([("cuda", "float16")] if device in ("auto", "cuda") else []) + [("cpu", "int8")]
+    model, last = None, None
+    try:
+        for dev, ct in tries:
+            try:
+                model = WhisperModel(model_size, device=dev, compute_type=ct)
+                break
+            except Exception as e:
+                last = e
+        if model is None:
+            raise RuntimeError(f"โหลดโมเดลรอง {model_size} ไม่ได้: {last}")
+        prompt, hotwords = _whisper_context()
+        segs, _info = model.transcribe(
+            audio_path, language="th", word_timestamps=False, vad_filter=True,
+            vad_parameters={"threshold": 0.35, "min_speech_duration_ms": 180,
+                            "min_silence_duration_ms": 350, "speech_pad_ms": 220,
+                            "max_speech_duration_s": 30},
+            beam_size=3, temperature=0.0, condition_on_previous_text=False,
+            initial_prompt=prompt, hotwords=hotwords,
+        )
+        out = []
+        for s in segs:
+            text = _normalize_thai(s.text)
+            if text:
+                out.append({"start": round(s.start, 3), "end": round(s.end, 3), "text": text})
+        return out
+    finally:
+        if cleanup:
+            shutil.rmtree(cleanup, ignore_errors=True)
+        if model is not None:
+            del model
+            gc.collect()
+
+
+def llm_reconcile_segments(primary_segments, secondary_segments, provider, api_key, model, base_url=None, keyterms=""):
+    """ให้ AI เทียบผลถอดเสียง 2 ชุด (คนละโมเดล) ระดับประโยค แล้วประกอบ/เลือกข้อความที่มีหลักฐานร่วมกัน
+    คืน dict {segment_index: ข้อความที่แก้แล้ว} เฉพาะที่ AI เห็นว่าควรแก้ (ยังไม่กรองความปลอดภัย —
+    ผู้เรียกต้องผ่าน _diff_word_corrections ก่อนนำไปใช้จริง)"""
+    if not primary_segments or not secondary_segments:
+        return {}
+    system = (
+        "คุณคือผู้ตรวจถอดเสียงภาษาไทยระดับมืออาชีพ มีผลถอดเสียง (ASR) สองชุดจากเสียงเดียวกัน "
+        "ชุดหลักมี id กำกับและต้องคงจำนวนบรรทัดเดิมเป๊ะ ชุดอ้างอิงมีเวลาให้เทียบเชิงเนื้อหา "
+        "หน้าที่: ประกอบ/เลือกข้อความที่มีหลักฐานร่วมกันของสองชุด แก้เฉพาะจุดที่ชุดหลักถอดผิดชัดเจน "
+        "ห้ามแต่งเนื้อหาใหม่ ห้ามเปลี่ยนความหมาย ห้ามเปลี่ยนตัวเลข/เปอร์เซ็นต์ "
+        "ถ้าสองชุดขัดกันและไม่มั่นใจ ให้คงชุดหลักไว้เหมือนเดิม "
+        + (f"ศัพท์เฉพาะที่ถูกต้องในคลิปนี้: {keyterms}\n" if keyterms.strip() else "")
+        + 'ตอบ JSON เท่านั้น: {"lines":[{"id":0,"text":"..."}]} ครบทุก id ที่ได้รับมา'
+    )
+    out_map = {}
+    for chunk_start in range(0, len(primary_segments), 60):  # แบ่งชุดกันพรอมต์ยาวเกินกับคลิปยาว
+        idxs = list(range(chunk_start, min(chunk_start + 60, len(primary_segments))))
+        chunk = [{"id": i, "text": primary_segments[i].get("text", "")} for i in idxs]
+        win_start = primary_segments[idxs[0]]["start"] - 1.0
+        win_end = primary_segments[idxs[-1]]["end"] + 1.0
+        evidence = [
+            {"time": f"{s['start']:.2f}-{s['end']:.2f}", "text": s["text"]}
+            for s in secondary_segments if s["end"] >= win_start and s["start"] <= win_end
+        ]
+        user = (
+            "ชุดหลัก:\n" + json.dumps(chunk, ensure_ascii=False) +
+            "\n\nชุดอ้างอิง (คนละโมเดล):\n" + json.dumps(evidence, ensure_ascii=False)
+        )
+        chain = [model] + [m for m in _FALLBACK_MODELS.get(provider, []) if m != model]
+        for m in chain:
+            try:
+                data = _llm_json(provider, api_key, m, system, user, base_url)
+                for line in data.get("lines", []):
+                    idx = line.get("id")
+                    if isinstance(idx, int) and 0 <= idx < len(primary_segments):
+                        new = str(line.get("text", "")).strip()
+                        if new and new != primary_segments[idx].get("text", ""):
+                            out_map[idx] = new
+                break
+            except Exception as e:
+                print(f"   !! เทียบ 2 โมเดลด้วย {m} ไม่ได้ ({str(e)[:120]})", flush=True)
+    return out_map
+
+
+def _tokenize_with_offsets(text):
+    """ตัดคำไทย (pythainlp, keep_whitespace) แล้วคืนเฉพาะคำที่ไม่ใช่ช่องว่าง พร้อมตำแหน่งจริงใน text
+    (ใช้ตัดสตริงย่อยกลับมาแบบตรงเป๊ะ แทนการต่อ token เอง ซึ่งอาจไม่ตรงกับต้นฉบับถ้ามีช่องว่างคั่น)"""
+    try:
+        from pythainlp import word_tokenize
+        toks = word_tokenize(text, engine="newmm", keep_whitespace=True)
+    except Exception:
+        toks = re.findall(r"\S+|\s+", text)
+    out, pos = [], 0
+    for tk in toks:
+        start = pos
+        pos += len(tk)
+        if tk.strip():
+            out.append((tk, start, pos))
+    return out
+
+
+_THAI_ONLY_RE = re.compile(r"^[฀-๿\s]+$")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def _diff_word_corrections(orig_text, new_text):
+    """เทียบข้อความเดิม/ใหม่ระดับคำ (ตัดคำไทยด้วย pythainlp) แล้วดึงเฉพาะคู่ที่แก้ได้อย่างปลอดภัย 2 แบบ:
+    1) แทนที่คำเดียวด้วยคำเดียว (ผ่าน _is_safe_correction) — แก้สะกดผิดทั่วไป
+    2) รวมพยางค์ไทยหลายชิ้น (≤4) -> คำอังกฤษ 1 คำ — แก้เคสทับศัพท์เพี้ยน เช่น "แชทจีบีที" -> "ChatGPT"
+       (ทิศตรงข้ามไม่แก้ เพราะโมเดลหลักมักสะกดอังกฤษที่ตั้งใจพูดถูกอยู่แล้ว ไม่ควรเปลี่ยนเป็นทับศัพท์ไทย)
+    ทิ้งกรณีตัด/แทรก/แทนที่หลายคำแบบอื่น (เสี่ยงเรียบเรียงประโยคใหม่)
+    วิธีนี้ทำให้ผลจากการเทียบ 2 โมเดลกลายเป็น corrections dict แบบเดียวกับ llm_thai_corrections
+    ใช้ pipeline เดิมได้เลย ไม่ต้องยุ่งกับ word timestamps"""
+    a = _tokenize_with_offsets(orig_text)
+    b = _tokenize_with_offsets(new_text)
+    if not a or not b:
+        return {}
+    a_txt, b_txt = [t[0] for t in a], [t[0] for t in b]
+    import difflib
+    sm = difflib.SequenceMatcher(None, a_txt, b_txt)
+    out = {}
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag != "replace":
+            continue
+        na, nb = i2 - i1, j2 - j1
+        if na == 1 and nb == 1:
+            wrong, right = a_txt[i1], b_txt[j1]
+            if _is_safe_correction(wrong, right):
+                out[wrong] = right
+        elif 1 <= na <= 4 and nb == 1 and _THAI_ONLY_RE.match("".join(a_txt[i1:i2])) and _LATIN_RE.search(b_txt[j1]):
+            wrong = orig_text[a[i1][1]:a[i2 - 1][2]]
+            right = b_txt[j1]
+            if 2 <= len(wrong) <= 20 and not any(c.isdigit() for c in wrong + right):
+                out[wrong] = right
+    return out
+
+
+def reconcile_word_corrections(primary_segments, secondary_segments, provider, api_key, model, base_url=None, keyterms=""):
+    """ฟังก์ชันหลักที่เรียกใช้จากภายนอก: เทียบ 2 โมเดลระดับประโยค แล้วดึงเฉพาะคำเดี่ยวที่แก้ได้อย่าง
+    ปลอดภัยออกมาเป็น corrections dict {คำผิด: คำถูก} — เอาไปรวมกับ brand['corrections'] ได้ทันที
+    (ไม่กระทบจังหวะเวลาเลย เพราะใช้กลไก corrections/correct_thai เดิมที่มีอยู่แล้ว)"""
+    line_fixes = llm_reconcile_segments(primary_segments, secondary_segments, provider, api_key, model, base_url, keyterms)
+    out = {}
+    for idx, new_text in line_fixes.items():
+        out.update(_diff_word_corrections(primary_segments[idx].get("text", ""), new_text))
+    return out
+
+
+# ============================================================
 #  เอเจนต์ตัดคำพูดติดขัด / พูดผิด (disfluency · outtake · blooper · flub · slip)
 #  หลักการ 2 ชั้น:
 #   ชั้น 1 (ฮิวริสติก · ฟรี · เปิดตลอด): ตัดคำเติม (เอ่อ อ่า um) + พูดคำเดิมซ้ำติดกัน (false start / ติดอ่าง)

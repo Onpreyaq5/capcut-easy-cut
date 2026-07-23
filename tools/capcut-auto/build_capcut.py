@@ -78,6 +78,8 @@ def main():
     ap.add_argument("--llm-key", default="")
     ap.add_argument("--llm-model", default="")
     ap.add_argument("--llm-base", default="", help="base URL ของ AI ในเครื่อง (local)")
+    ap.add_argument("--compare-models", action="store_true",
+                    help="ถอดเสียงซ้ำด้วยโมเดลคนละตัว แล้วให้ AI เทียบผลเพื่อความแม่นยำสูงสุด (ช้าลง ~2 เท่า ต้องตั้ง AI ด้วย)")
     a = ap.parse_args()
 
     cc.ensure_ffmpeg()   # เช็ก ffmpeg ก่อน
@@ -158,6 +160,27 @@ def main():
         print(f"[{i+1}/{len(clips)}] {os.path.basename(clip)}", flush=True)
         dur = cc.ffprobe_dur(clip)
         data = cc.transcribe(clip, cache_json=os.path.join(work, f"words_{i:02d}.json"))
+        # ---- เทียบผลถอดเสียง 2 โมเดล (คนละสายพันธุ์) เพื่อความแม่นยำสูงสุด (ไม่บังคับ, ต้องมี AI) ----
+        if a.compare_models and ok_llm:
+            secondary_model = cc._SECONDARY_MODEL_FOR.get(cc._primary_model_name())
+            if not secondary_model:
+                print("[RECONCILE] โปรไฟล์ปัจจุบันไม่มีโมเดลรองให้เทียบ (ข้าม)", flush=True)
+            else:
+                try:
+                    print(f"      [RECONCILE] ถอดเสียงรอบ 2 ด้วยโมเดล {secondary_model} เพื่อเทียบผล...", flush=True)
+                    secondary_segs = cc.transcribe_secondary(clip, secondary_model)
+                    reps2 = cc.reconcile_word_corrections(
+                        data["segments"], secondary_segs,
+                        a.llm_provider, a.llm_key, a.llm_model, a.llm_base or None,
+                    )
+                    if reps2:
+                        brand["corrections"].update(reps2)
+                        shown = ", ".join(f"{k}→{v}" for k, v in list(reps2.items())[:8])
+                        print(f"      [RECONCILE] เทียบ 2 โมเดลแล้ว แก้เพิ่ม {len(reps2)} คำ ({shown})", flush=True)
+                    else:
+                        print("      [RECONCILE] เทียบ 2 โมเดลแล้ว ไม่พบคำที่ต้องแก้เพิ่ม", flush=True)
+                except Exception as e:
+                    print(f"      [RECONCILE] เทียบ 2 โมเดลไม่สำเร็จ (ข้าม): {str(e)[:200]}", flush=True)
         # ---- เอเจนต์ตัดคำพูดติดขัด/พูดผิด (ก่อนตัด dead air เพื่อรวมช่วงตัดเข้าด้วยกัน) ----
         flub_cuts = []
         if a.cut_flubs:

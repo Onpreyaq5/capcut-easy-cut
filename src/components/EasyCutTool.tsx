@@ -255,16 +255,18 @@ export function EasyCutTool() {
       fd.append('llmKey', thaiCheckLlm.key);
       fd.append('llmModel', thaiCheckLlm.model);
       fd.append('llmBase', thaiCheckLlm.base);
+      // เทียบ 2 โมเดล ต้องมี AI ตัดสินด้วยเสมอ — ถ้าไม่ได้เปิด AI ไว้ ค่านี้จะไม่ถูกส่งไปเลย
+      if (settings.compareModels) fd.append('compareModels', 'on');
     }
     files.forEach((file) => fd.append('clips', file));
     return fd;
   }
 
-  // จบงาน CapCut: ดึงสรุปผลตรวจภาษาไทยจาก log มาแสดง
+  // จบงาน CapCut: ดึงสรุปผลตรวจภาษาไทย + เทียบ 2 โมเดล จาก log มาแสดง
   function capcutSuccessMessage(log: string[]): string {
     const infoLines = log
-      .filter((l) => l.includes('[THAI]'))
-      .map((l) => l.replace('[THAI]', 'ภาษาไทย:').trim())
+      .filter((l) => l.includes('[THAI]') || l.includes('[RECONCILE]'))
+      .map((l) => l.replace('[THAI]', 'ภาษาไทย:').replace('[RECONCILE]', 'เทียบ 2 โมเดล:').trim())
       .join('\n');
     return (
       `สร้างโปรเจกต์ "${projectName || 'CAPCUT_Easy_CUT'}" ใน CapCut แล้ว ปิด CapCut ให้สนิทแล้วเปิดใหม่` +
@@ -804,6 +806,20 @@ export function EasyCutTool() {
                       </a>{' '}
                       (ล็อกอินด้วย Google ได้ ไม่ต้องผูกบัตร)
                     </p>
+                    <label className="mt-1 flex items-start gap-2 rounded-md border border-border bg-background p-2.5">
+                      <input
+                        type="checkbox"
+                        checked={!!settings.compareModels}
+                        onChange={(e) => setSettings({ compareModels: e.target.checked })}
+                        className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                      />
+                      <span className="text-xs leading-relaxed text-text-secondary">
+                        <span className="font-semibold">เทียบ 2 โมเดล AI (แม่นยำสูงสุด)</span>
+                        <br />
+                        ถอดเสียงซ้ำด้วยโมเดลคนละตัว แล้วให้ AI เทียบผลเพื่อแก้คำที่ถอดผิด/ทับศัพท์เพี้ยน
+                        (เช่น &ldquo;แชทจีบีที&rdquo; → &ldquo;ChatGPT&rdquo;) แม่นขึ้นชัดเจน แต่ใช้เวลาถอดเสียงเพิ่ม ~2 เท่า
+                      </span>
+                    </label>
                   </>
                 )}
               </div>

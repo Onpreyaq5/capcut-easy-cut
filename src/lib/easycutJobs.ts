@@ -176,6 +176,10 @@ function ingestLine(j: Job, line: string) {
     setClipProgress(j, pct / 100);
     return;
   }
+  if (/\[RECONCILE\].*ถอดเสียงรอบ 2/.test(t)) {
+    j.phase = `เทียบ 2 โมเดล AI คลิป ${j.curClip || 1}/${j.totalClips} (ถอดเสียงรอบ 2)`;
+    return;
+  }
   if (/ตัดคำพูดติดขัด/.test(t)) {
     j.phase = `ตัดคำพูดติดขัด/พูดผิด คลิป ${j.curClip || 1}/${j.totalClips}`;
     setClipProgress(j, 1);
@@ -269,6 +273,7 @@ export interface StartOptions {
   quality?: 'fast' | 'accurate' | 'max';
   keyterms?: string;
   cutFlubs?: boolean; // ตัดคำพูดติดขัด/พูดผิด (เอ่อ อ่า, พูดซ้ำ, retake/blooper)
+  compareModels?: boolean; // เทียบผลถอดเสียง 2 โมเดล (คนละสายพันธุ์) ให้ AI เลือกคำที่แม่นกว่า — ต้องมี AI ด้วย
   bgm?: string; // path ไฟล์เพลงประกอบ (capcut)
   removeVocals?: boolean; // ตัดเสียงร้องออกจากเพลง BGM
   bgmVolume?: number; // ระดับเสียงเพลง 0-1
@@ -302,6 +307,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
     if (opts.deadAir === false) args.push('--no-dead-air');
     if (words) args.push('--words', words);
     if (opts.cutFlubs) args.push('--cut-flubs');
+    if (opts.compareModels) args.push('--compare-models');
     args.push('--quality', opts.quality || 'max');
     if (opts.keyterms) args.push('--keyterms', opts.keyterms);
     const l = opts.llm;
@@ -320,6 +326,7 @@ export async function startJob(opts: StartOptions): Promise<string> {
     if (opts.hook) args.push('--hook', opts.hook);
     if (words) args.push('--words', words);
     if (opts.cutFlubs) args.push('--cut-flubs');
+    if (opts.compareModels) args.push('--compare-models');
     if (opts.bgm) {
       args.push('--bgm', opts.bgm);
       if (opts.removeVocals) args.push('--remove-vocals');

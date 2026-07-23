@@ -248,6 +248,7 @@ export async function POST(req: NextRequest) {
       quality: fields.quality === 'fast' || fields.quality === 'accurate' ? fields.quality : 'max',
       keyterms: (fields.keyterms || '').trim().slice(0, 1000),
       cutFlubs: fields.cutFlubs === 'on',
+      compareModels: fields.compareModels === 'on',
       bgm: bgmPath,
       removeVocals: fields.removeVocals === 'on',
       bgmVolume: parseFloat(fields.bgmVolume || '0.12') || 0.12,
